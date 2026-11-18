@@ -1,6 +1,6 @@
 """Live tests against docker/podman.
 
-Real mode (default): nginx:1.27-alpine + alpine:3.20 probe -> full checks incl. TLS/headers.
+Real mode (default): nginx:1.27-alpine + seclab/node:0.2 probe -> full checks incl. TLS/headers.
 Stub mode (SECLAB_STUB=1, SECLAB_WEB_IMAGE/SECLAB_PROBE_IMAGE=seclab/stub:local): offline;
 container hardening, limits, isolation, egress, lifecycle are checked for real, nginx semantics skipped.
 """
@@ -21,7 +21,7 @@ from seclab.web import WebLab, lab_label, reset, teardown
 pytestmark = pytest.mark.integration
 
 STUB = os.environ.get("SECLAB_STUB") == "1"
-PROBE_IMAGE = os.environ.get("SECLAB_PROBE_IMAGE", "alpine:3.20")
+PROBE_IMAGE = os.environ.get("SECLAB_PROBE_IMAGE", "seclab/node:0.2")
 nginx_only = pytest.mark.skipif(STUB, reason="stub mode: nginx semantics not emulated")
 
 

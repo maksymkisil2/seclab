@@ -1,0 +1,61 @@
+name = "dmz"
+description = "Perimeter firewall: public web in DMZ, app/db/cache internal, admin bastion in mgmt"
+
+[segments]
+dmz = "10.90.10.0/24"
+internal = "10.90.20.0/24"
+mgmt = "10.90.30.0/24"
+
+[nodes.web]
+role = "web-proxy"
+segment = "dmz"
+upstream = "app"
+
+[nodes.app]
+role = "web-static"
+segment = "internal"
+
+[nodes.db]
+role = "service"
+segment = "internal"
+port = 5432
+
+[nodes.cache]
+role = "service"
+segment = "internal"
+port = 6379
+
+[nodes.bastion]
+role = "ssh"
+segment = "mgmt"
+
+[[forward]]
+host_port = 8080
+node = "web"
+port = 8080
+
+[[forward]]
+host_port = 8443
+node = "web"
+port = 8443
+
+[[forward]]
+host_port = 2222
+node = "bastion"
+port = 22
+
+# Target policy: only these inter-segment flows are legitimate.
+[[allow]]
+from = "web"
+to = "app"
+ports = [8080]
+
+[[allow]]
+from = "bastion"
+to = "db"
+ports = [5432]
+
+[[allow]]
+from = "bastion"
+to = "web"
+ports = [8443]

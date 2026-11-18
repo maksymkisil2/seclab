@@ -16,11 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import nginx
+from .hardening import LABEL_MANAGED, container_flags, lab_label
 from .pki import ensure_pki
 from .profiles import Profile, get_profile
 from .runtime import ContainerError, Runtime
 
-LABEL_MANAGED = "seclab.managed=1"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 
 
@@ -30,10 +30,6 @@ def default_image() -> str:
 
 def seclab_home() -> Path:
     return Path(os.environ.get("SECLAB_HOME", Path.home() / ".seclab"))
-
-
-def lab_label(lab: str) -> str:
-    return f"seclab.lab={lab}"
 
 
 def validate_name(lab: str) -> str:
@@ -130,22 +126,7 @@ class WebLab:
 
     # ---- container args (pure, unit-tested) ----------------------------------
     def _base_args(self, cname: str, role: str) -> list[str]:
-        c = self.profile.container
-        args = [
-            "run", "-d", "--name", cname, "--hostname", role,
-            "--label", LABEL_MANAGED, "--label", lab_label(self.name), "--label", f"seclab.role={role}",
-            "--memory", c.memory, "--memory-swap", c.memory, "--cpus", c.cpus,
-            "--pids-limit", str(c.pids), "--restart", "no", "--log-opt", "max-size=1m",
-        ]
-        if c.read_only:
-            args += ["--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m"]
-        if c.drop_all_caps:
-            args += ["--cap-drop", "ALL"]
-        if c.no_new_privileges:
-            args += ["--security-opt", "no-new-privileges:true"]
-        if c.user:
-            args += ["--user", c.user]
-        return args
+        return ["run", "-d", *container_flags(cname, self.name, role, self.profile.container)]
 
     def _entry(self) -> list[str]:
         return ["--entrypoint", "nginx", self.image, "-c", nginx.CONF_PATH, "-g", "daemon off;"]

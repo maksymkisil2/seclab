@@ -32,8 +32,9 @@ class Runtime:
     def detect(cls) -> "Runtime":
         return cls(detect_runtime())
 
-    def run(self, *args: str, check: bool = True, timeout: int = 120) -> subprocess.CompletedProcess:
-        proc = subprocess.run([self.binary, *args], capture_output=True, text=True, timeout=timeout)
+    def run(self, *args: str, check: bool = True, timeout: int = 120,
+            stdin: str | None = None) -> subprocess.CompletedProcess:
+        proc = subprocess.run([self.binary, *args], capture_output=True, text=True, timeout=timeout, input=stdin)
         if check and proc.returncode != 0:
             raise ContainerError(
                 f"{self.binary} {' '.join(args)} -> exit {proc.returncode}: {proc.stderr.strip()}"

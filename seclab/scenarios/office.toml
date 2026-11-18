@@ -1,0 +1,89 @@
+name = "office"
+description = "Small office: staff LAN, server zone, isolated guest Wi-Fi, admin jump host"
+
+[segments]
+staff = "10.91.10.0/24"
+servers = "10.91.20.0/24"
+guest = "10.91.30.0/24"
+admin = "10.91.40.0/24"
+
+[nodes.pc1]
+role = "ssh"
+segment = "staff"
+
+[nodes.printer]
+role = "service"
+segment = "staff"
+port = 9100
+
+[nodes.intranet]
+role = "web-proxy"
+segment = "servers"
+upstream = "content"
+
+[nodes.content]
+role = "web-static"
+segment = "servers"
+
+[nodes.files]
+role = "service"
+segment = "servers"
+port = 445
+
+[nodes.ldap]
+role = "service"
+segment = "servers"
+port = 636
+
+[nodes.guest1]
+role = "ssh"
+segment = "guest"
+
+[nodes.jump]
+role = "ssh"
+segment = "admin"
+
+[[forward]]
+host_port = 2201
+node = "pc1"
+port = 22
+
+[[forward]]
+host_port = 2203
+node = "guest1"
+port = 22
+
+[[forward]]
+host_port = 2204
+node = "jump"
+port = 22
+
+[[forward]]
+host_port = 9443
+node = "intranet"
+port = 8443
+
+[[allow]]
+from = "staff"
+to = "intranet"
+ports = [8443]
+
+[[allow]]
+from = "staff"
+to = "files"
+ports = [445]
+
+[[allow]]
+from = "staff"
+to = "ldap"
+ports = [636]
+
+[[allow]]
+from = "jump"
+to = "servers"
+ports = [22, 445, 636, 8443]
+
+[[allow]]
+from = "jump"
+to = "staff"
+ports = [22]
