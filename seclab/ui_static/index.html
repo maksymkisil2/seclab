@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>seclab</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="brand">seclab<span class="dim"> // hardening &amp; audit lab</span></div>
+  <div id="conn" class="pill">connecting…</div>
+</header>
+
+<div id="auth" class="banner hidden">
+  No API token. Open the exact URL printed by <code>seclab ui</code> (it ends with <code>#t=…</code>).
+</div>
+
+<main>
+  <section class="col-left">
+    <h2>Scenarios</h2>
+    <div id="scenarios"></div>
+  </section>
+
+  <section class="col-main">
+    <h2>Labs <button id="refresh" class="ghost" title="Refresh">↻</button></h2>
+    <table id="labs" class="grid">
+      <thead><tr><th>lab</th><th>scenario</th><th>profile</th><th>state</th><th>containers</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="labs-empty" class="dim hidden">No labs yet — launch a scenario on the left.</p>
+
+    <div id="detail" class="hidden">
+      <div class="detail-head">
+        <h2 id="d-title"></h2>
+        <div class="tabs">
+          <button data-tab="topo" class="tab active">Topology</button>
+          <button data-tab="check" class="tab">Audit</button>
+          <button data-tab="fw" class="tab">Firewall</button>
+        </div>
+      </div>
+
+      <div id="tab-topo" class="tabpane">
+        <div id="access"></div>
+        <div id="topo" class="topo"></div>
+      </div>
+
+      <div id="tab-check" class="tabpane hidden">
+        <div class="row">
+          <button id="run-check">Run audit</button>
+          <label class="dim"><input type="checkbox" id="only-fail"> findings only</label>
+          <span id="check-summary" class="summary"></span>
+        </div>
+        <table id="check" class="grid compact">
+          <thead><tr><th></th><th>kind</th><th>from</th><th>to</th><th>port</th><th>expected</th><th>actual</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="tab-fw" class="tabpane hidden">
+        <div class="row">
+          <span class="dim">load reference:</span>
+          <span id="fw-levels"></span>
+          <button id="fw-reload" class="ghost">reload</button>
+        </div>
+        <div class="fw-cols">
+          <div>
+            <h3>Edit ruleset <span class="dim">(router.nft)</span></h3>
+            <textarea id="fw-edit" spellcheck="false"></textarea>
+            <div class="row"><button id="fw-apply">Validate &amp; apply</button><span id="fw-msg"></span></div>
+          </div>
+          <div>
+            <h3>Live <span class="dim">(nft list, counters)</span></h3>
+            <pre id="fw-live"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toasts"></div>
+<template id="tpl-scenario">
+  <div class="card">
+    <div class="card-head"><b class="s-name"></b><span class="s-kind pill small"></span></div>
+    <div class="s-desc dim"></div>
+    <div class="s-meta dim small"></div>
+    <form class="launch">
+      <select name="profile"></select>
+      <input name="name" placeholder="lab name" pattern="[a-z0-9][a-z0-9\-]{0,30}" maxlength="31">
+      <input name="port_offset" type="number" min="0" max="50000" step="1" value="0" title="port offset">
+      <button type="submit">Launch</button>
+    </form>
+  </div>
+</template>
+</body>
+</html>

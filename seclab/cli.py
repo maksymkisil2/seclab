@@ -41,6 +41,9 @@ def _parser() -> argparse.ArgumentParser:
     rd.add_argument("--role", default="edge", choices=["edge", "app"])
     rd.add_argument("--https-port", type=int, default=8443)
 
+    ui = sub.add_parser("ui", help="local web interface (127.0.0.1 only)")
+    ui.add_argument("--port", type=int, default=8765)
+
     img = sub.add_parser("images", help="local images").add_subparsers(dest="action", required=True)
     img.add_parser("build", help=f"build {NODE_TAG} (router/probe/service/ssh)")
 
@@ -130,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if a.cmd == "lab":
             return _lab_cmd(a)
+        if a.cmd == "ui":
+            from .ui import serve
+            serve(a.port)
+            return 0
         if a.cmd == "images":
             build_node_image(Runtime.detect())
             print(f"built {NODE_TAG}")

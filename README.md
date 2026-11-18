@@ -29,6 +29,15 @@ Profiles (`seclab profiles`) drive everything at once: TLS, HTTP headers, sshd, 
 
 Always on: 64 MiB / 0.25 CPU / 64 PIDs per node, publish on 127.0.0.1 only, no egress from segments.
 
+## Web UI
+```sh
+seclab ui                   # prints http://127.0.0.1:8765/#t=<token>; open that exact URL
+```
+Launch scenarios with a profile, see labs and containers, topology with audit verdicts per node,
+run the audit, edit/validate/apply the router ruleset, reset/down/purge.
+The UI drives Docker, so it is locked down: 127.0.0.1 only, per-run token (URL fragment, never logged),
+Host-header check against DNS rebinding, JSON-only POST, strict CSP, no external assets.
+
 ## Lab topology
 ```
 127.0.0.1:<port> ─▶ [ingress] router ─DNAT─▶ node
@@ -91,4 +100,5 @@ ports = [8080]
 ```sh
 ./selftest/run.sh          # real images; pulls nginx:1.27-alpine and alpine:3.20 (for the node build)
 ./selftest/run.sh --stub   # offline: scratch stub (Go) + host nft; skips nginx/sshd semantics
+pip install playwright && playwright install chromium   # optional: enables the browser UI test
 ```

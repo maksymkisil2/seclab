@@ -8,7 +8,7 @@ cd "$ROOT"
 RT=${SECLAB_RUNTIME:-$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)}
 
 echo "== unit"
-python3 -m pytest -q tests/test_unit.py tests/test_lab_unit.py
+python3 -m pytest -q tests/test_unit.py tests/test_lab_unit.py tests/test_ui_unit.py
 
 if [ "${1:-}" = "--stub" ]; then
     echo "== build stub image"
@@ -28,6 +28,9 @@ echo "== integration: web contour"
 python3 -m pytest -q -rs tests/test_integration.py
 echo "== integration: multi-segment labs"
 python3 -m pytest -q -rs tests/test_lab_integration.py
+
+echo "== integration: web UI (browser; skipped without playwright)"
+python3 -m pytest -q -rs tests/test_ui_e2e.py
 
 echo "== leftovers"
 left=$("$RT" ps -aq --filter label=seclab.managed=1; "$RT" network ls -q --filter label=seclab.managed=1)

@@ -1,6 +1,6 @@
 [project]
 name = "seclab"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lightweight local lab: isolated networks, hardening profiles, audit targets"
 requires-python = ">=3.11"
 dependencies = []
@@ -19,7 +19,7 @@ build-backend = "setuptools.build_meta"
 packages = ["seclab"]
 
 [tool.setuptools.package-data]
-seclab = ["scenarios/*.toml"]
+seclab = ["scenarios/*.toml", "ui_static/*"]
 
 [tool.pytest.ini_options]
 markers = ["integration: needs a running docker/podman daemon"]
