@@ -38,6 +38,14 @@
       <label>profile <select name="profile"></select></label>
       <label>difficulty <select name="difficulty"></select></label>
       <label>port offset <input name="port_offset" type="number" min="0" max="50000" value="0"></label>
+      <div class="checks vulns" id="gen-vulns" title="vulnerability types enabled on the sites (vulnerable profile)">
+        <span class="dim small">site vulns:</span>
+        <label><input type="checkbox" name="v_sqli" checked> sqli</label>
+        <label><input type="checkbox" name="v_xss" checked> xss</label>
+        <label><input type="checkbox" name="v_idor" checked> idor</label>
+        <label><input type="checkbox" name="v_traversal" checked> traversal</label>
+        <label><input type="checkbox" name="v_admin" checked> admin</label>
+      </div>
       <div id="gen-est" class="est dim small"></div>
       <button type="submit">Generate &amp; launch</button>
     </form>
@@ -61,6 +69,7 @@
           <button data-tab="check" class="tab">Audit</button>
           <button data-tab="fw" class="tab">Firewall</button>
           <button data-tab="flags" class="tab">Flags</button>
+          <button data-tab="attacks" class="tab">Attacks</button>
         </div>
       </div>
 
@@ -91,6 +100,21 @@
         <ul id="flag-list" class="flag-list"></ul>
         <p class="dim small">Each vulnerable site hides 4 flags: sqli (secrets table), idor (admin note),
           traversal (private file), admin (admin panel). Levels: easy → medium → hard filters; hardened = secure.</p>
+      </div>
+
+      <div id="tab-attacks" class="tabpane hidden">
+        <div class="row">
+          <span class="dim">run against this lab's own sites:</span>
+          <span id="attack-cats"></span>
+          <button id="attack-run">Run attacks</button>
+          <span id="attack-msg" class="summary"></span>
+        </div>
+        <table id="attack-results" class="grid compact">
+          <thead><tr><th></th><th>site</th><th>category</th><th>technique</th><th>flag</th><th>detail</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="dim small">Runs the built-in exploit catalogue against the lab's own vulnweb sites on
+          127.0.0.1 and submits captured flags. For checking your own defenses; it never targets anything else.</p>
       </div>
 
       <div id="tab-fw" class="tabpane hidden">

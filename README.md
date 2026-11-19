@@ -56,6 +56,16 @@ Applies to the `vulnerable` profile (`baseline` / `hardened` deploy secure apps 
 
 Planted holes and flags are derived from `--seed`: same seed, same lab. `lab check` lists exactly the holes.
 
+### Vulnerability types
+
+Beyond the level, each site's vulnerability classes can be toggled independently: `sqli`, `xss`, `idor`,
+`traversal`, `admin`. A disabled class behaves as hardened regardless of level.
+```sh
+seclab lab up corp --profile vulnerable --difficulty easy --vulns idor,traversal   # only these two
+seclab lab up corp --profile vulnerable --vulns none                               # all classes secure
+```
+UI: *site vulns* checkboxes on the generator form (default: all on).
+
 ## Flags
 
 Every vulnerable site (`seclab-agent vulnweb`) hides 4 flags: `sqli` (secrets table via UNION),
@@ -65,6 +75,18 @@ seclab lab flag --name corp 'FLAG{sqli-…}'
 seclab lab score --name corp
 ```
 UI: *Flags* tab. Flags are per lab (HMAC of name + seed); `docker inspect` can reveal them: play fair.
+
+## Attacks (validate your own defenses)
+
+A built-in exploit catalogue runs the training techniques against your lab's **own** sites and reports
+which land; captured flags go to the scoreboard. It targets only `127.0.0.1:<forwarded port>` of the
+current lab — any other host is refused.
+```sh
+seclab lab attack --name corp                 # all categories
+seclab lab attack --name corp --only sqli,idor
+```
+UI: *Attacks* tab — pick categories, *Run attacks*, read the results table. Categories: `sqli`, `idor`,
+`traversal`, `admin`, `creds`.
 
 ## Modes
 | command | what |

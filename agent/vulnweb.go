@@ -38,6 +38,9 @@ import (
 
 var Levels = []string{"easy", "medium", "hard", "secure"}
 
+// VulnClasses are the vulnerability types that can be turned on or off independently of the level.
+var VulnClasses = []string{"sqli", "xss", "idor", "traversal", "admin"}
+
 type session struct {
 	id       int64
 	username string
@@ -50,8 +53,19 @@ type App struct {
 	db       *DB
 	flags    map[string]string
 	filesDir string
+	vulns    map[string]bool // which classes are vulnerable; a class not here behaves securely
+	adminPw  string          // actual admin password (weak at easy/medium, random otherwise)
 	mu       sync.Mutex
 	sessions map[string]session
+}
+
+// lv is the EFFECTIVE level for one vulnerability class: the app's level while that class is on,
+// otherwise "secure". A disabled class is thus indistinguishable from a fully hardened one.
+func (a *App) lv(class string) string {
+	if a.level != "secure" && a.vulns[class] {
+		return a.level
+	}
+	return "secure"
 }
 
 var hardFilter = regexp.MustCompile(`\s(or|and|union|select|from|where)\s`)
@@ -85,7 +99,7 @@ func checkPassword(stored, pw string) bool {
 	return err == nil && hmac.Equal(got, want)
 }
 
-func NewApp(level, site string, flags map[string]string, filesDir string) (*App, error) {
+func NewApp(level, site string, flags map[string]string, filesDir string, vulns map[string]bool) (*App, error) {
 	valid := false
 	for _, l := range Levels {
 		valid = valid || l == level
@@ -93,20 +107,36 @@ func NewApp(level, site string, flags map[string]string, filesDir string) (*App,
 	if !valid {
 		return nil, fmt.Errorf("level must be one of %v", Levels)
 	}
+	if vulns == nil { // unset (nil) -> every class vulnerable; an empty non-nil map -> all off
+		vulns = map[string]bool{}
+		for _, c := range VulnClasses {
+			vulns[c] = true
+		}
+	}
+	app := &App{level: level, site: site, flags: flags, filesDir: filesDir, vulns: vulns,
+		sessions: map[string]session{}}
 	if flags == nil {
 		flags = map[string]string{}
+		app.flags = flags
 	}
 	for _, k := range []string{"sqli", "idor", "traversal", "admin"} {
 		if flags[k] == "" {
 			flags[k] = fmt.Sprintf("FLAG{%s-%s}", k, randHex(6))
 		}
 	}
-	adminPw := map[string]string{"easy": "admin", "medium": "Winter2026!"}[level]
-	if adminPw == "" {
-		adminPw = randHex(12)
+	// The login path is injectable (string-concatenated) only while SQLi is on; then passwords must
+	// be stored in the clear for the concatenated query to match. Weak admin creds follow the admin class.
+	secureLogin := app.lv("sqli") == "secure"
+	weakCreds := app.lv("admin") != "secure"
+	adminPw := randHex(12)
+	if weakCreds {
+		if pw := map[string]string{"easy": "admin", "medium": "Winter2026!"}[level]; pw != "" {
+			adminPw = pw
+		}
 	}
+	app.adminPw = adminPw
 	store := func(pw string) Value {
-		if level == "secure" {
+		if secureLogin {
 			return hashPassword(pw)
 		}
 		return pw
@@ -139,7 +169,8 @@ func NewApp(level, site string, flags map[string]string, filesDir string) (*App,
 			}
 		}
 	}
-	return &App{level: level, site: site, db: db, flags: flags, filesDir: filesDir, sessions: map[string]session{}}, nil
+	app.db = db
+	return app, nil
 }
 
 // ---- helpers ------------------------------------------------------------------------------
@@ -195,14 +226,14 @@ func (a *App) login(w http.ResponseWriter, s session) {
 		c.SameSite = http.SameSiteStrictMode
 	}
 	http.SetCookie(w, c)
-	if a.level == "easy" {
+	if a.lv("admin") == "easy" {
 		http.SetCookie(w, &http.Cookie{Name: "role", Value: s.role, Path: "/"})
 	}
 }
 
-// sqlFilter returns false when the input is rejected by the level's (bypassable) filter.
+// sqlFilter returns false when the input is rejected by the SQLi class's (bypassable) filter.
 func (a *App) sqlFilter(in string) bool {
-	switch a.level {
+	switch a.lv("sqli") {
 	case "medium":
 		return !strings.Contains(in, "--") && !strings.Contains(in, " or ")
 	case "hard":
@@ -213,7 +244,7 @@ func (a *App) sqlFilter(in string) bool {
 }
 
 func (a *App) sqlError(err error, q string) string {
-	if a.level == "easy" {
+	if a.lv("sqli") == "easy" {
 		return "<pre>SQL error: " + html.EscapeString(err.Error()) + "\nquery: " + html.EscapeString(q) + "</pre>"
 	}
 	return "<p>Request failed.</p>"
@@ -243,7 +274,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("/files", a.files)
 	mux.HandleFunc("/admin", a.admin)
 	mux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
-		if a.level == "secure" {
+		if a.lv("admin") == "secure" {
 			http.NotFound(w, r)
 			return
 		}
@@ -251,13 +282,13 @@ func (a *App) Handler() http.Handler {
 		fmt.Fprint(w, "User-agent: *\nDisallow: /admin\nDisallow: /backup/\n")
 	})
 	mux.HandleFunc("/backup/config.bak", func(w http.ResponseWriter, r *http.Request) {
-		if a.level != "easy" && a.level != "medium" {
+		// Exposed only while the admin class is at easy/medium (the levels with a guessable password).
+		if lv := a.lv("admin"); lv != "easy" && lv != "medium" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
-		pw := map[string]string{"easy": "admin", "medium": "Winter2026!"}[a.level]
-		fmt.Fprintf(w, "[db]\nhost=10.0.0.5\nuser=admin\npassword=%s\n", pw)
+		fmt.Fprintf(w, "[db]\nhost=10.0.0.5\nuser=admin\npassword=%s\n", a.adminPw)
 	})
 	return mux
 }
@@ -279,7 +310,7 @@ func (a *App) loginPage(w http.ResponseWriter, r *http.Request) {
 	u, p := r.FormValue("username"), r.FormValue("password")
 	var s session
 	found := false
-	if a.level == "secure" {
+	if a.lv("sqli") == "secure" {
 		res, err := a.db.Query("SELECT id, username, role, password FROM users WHERE username = ?", u)
 		if err == nil && len(res.Rows) == 1 && checkPassword(toStr(res.Rows[0][3]), p) {
 			s, found = session{res.Rows[0][0].(int64), toStr(res.Rows[0][1]), toStr(res.Rows[0][2])}, true
@@ -315,7 +346,7 @@ func attrEscapeNoQuotes(s string) string {
 func (a *App) directory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	var text, attr string
-	switch a.level {
+	switch a.lv("xss") {
 	case "easy":
 		text, attr = q, q
 	case "medium":
@@ -334,7 +365,7 @@ func (a *App) directory(w http.ResponseWriter, r *http.Request) {
 	var res *Result
 	var err error
 	sql := ""
-	if a.level == "secure" {
+	if a.lv("sqli") == "secure" {
 		res, err = a.db.Query("SELECT username, email FROM users WHERE username LIKE ?", "%"+q+"%")
 	} else {
 		if !a.sqlFilter(q) {
@@ -369,12 +400,13 @@ func noteRef(id int64) string {
 
 func (a *App) notes(w http.ResponseWriter, r *http.Request) {
 	s, logged := a.current(r)
-	if a.level != "easy" && !logged {
+	idor := a.lv("idor")
+	if idor != "easy" && !logged {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 	var id int64 = -1
-	if a.level == "hard" {
+	if idor == "hard" {
 		if ref := r.URL.Query().Get("ref"); ref != "" {
 			raw, err := base64.URLEncoding.DecodeString(ref)
 			if err == nil && strings.HasPrefix(string(raw), "note:") {
@@ -393,7 +425,7 @@ func (a *App) notes(w http.ResponseWriter, r *http.Request) {
 		body := "<ul>"
 		for _, n := range res.Rows {
 			link := "/notes?id=" + toStr(n[0])
-			if a.level == "hard" {
+			if idor == "hard" {
 				link = "/notes?ref=" + noteRef(n[0].(int64))
 			}
 			body += `<li><a href="` + link + `">` + html.EscapeString(toStr(n[1])) + "</a></li>"
@@ -402,7 +434,7 @@ func (a *App) notes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, ok := a.noteByID(id)
-	if !ok || (a.level == "secure" && toStr(n[1]) != s.username) {
+	if !ok || (idor == "secure" && toStr(n[1]) != s.username) {
 		a.page(w, r, http.StatusNotFound, "Note", "<p>No such note.</p>")
 		return
 	}
@@ -417,7 +449,7 @@ func (a *App) files(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var path string
-	switch a.level {
+	switch a.lv("traversal") {
 	case "easy":
 		path = filepath.Join(base, name)
 	case "medium":
@@ -445,7 +477,7 @@ func (a *App) files(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if a.level == "secure" {
+	if a.lv("traversal") == "secure" {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 	w.Write(data)
@@ -454,7 +486,7 @@ func (a *App) files(w http.ResponseWriter, r *http.Request) {
 func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 	s, ok := a.current(r)
 	isAdmin := ok && s.role == "admin"
-	if a.level == "easy" {
+	if a.lv("admin") == "easy" {
 		if c, err := r.Cookie("role"); err == nil && c.Value == "admin" {
 			isAdmin = true // trusts a client-side cookie
 		}
@@ -466,6 +498,34 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request) {
 	a.page(w, r, http.StatusOK, "Admin", "<p>Maintenance key: <code>"+html.EscapeString(a.flags["admin"])+"</code></p>")
 }
 
+// parseVulns turns a comma list of class names into an enabled-set.
+// "" -> nil (all classes on); "none" -> empty non-nil map (all off); else the listed classes.
+func parseVulns(list string) (map[string]bool, error) {
+	list = strings.TrimSpace(list)
+	if list == "" {
+		return nil, nil
+	}
+	if list == "none" {
+		return map[string]bool{}, nil
+	}
+	valid := map[string]bool{}
+	for _, c := range VulnClasses {
+		valid[c] = true
+	}
+	out := map[string]bool{}
+	for _, c := range strings.Split(list, ",") {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if !valid[c] {
+			return nil, fmt.Errorf("unknown vuln class %q (known: %s)", c, strings.Join(VulnClasses, ","))
+		}
+		out[c] = true
+	}
+	return out, nil
+}
+
 // ---- entry --------------------------------------------------------------------------------
 func runVulnweb(args []string) int {
 	fs := flag.NewFlagSet("vulnweb", flag.ContinueOnError)
@@ -474,6 +534,7 @@ func runVulnweb(args []string) int {
 	site := fs.String("site", "Corp", "site name")
 	flagsFile := fs.String("flags", "", "JSON file with flag values")
 	files := fs.String("files", "/tmp/vulnweb", "writable dir for served files")
+	vulnList := fs.String("vulns", "", "comma list of enabled vuln classes (default: all) from "+strings.Join(VulnClasses, ","))
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -489,7 +550,12 @@ func runVulnweb(args []string) int {
 			return 1
 		}
 	}
-	app, err := NewApp(*level, *site, flags, *files)
+	vulns, err := parseVulns(*vulnList)
+	if err != nil {
+		log.Print(err)
+		return 2
+	}
+	app, err := NewApp(*level, *site, flags, *files, vulns)
 	if err != nil {
 		log.Print(err)
 		return 1

@@ -183,6 +183,63 @@ def test_ui_generate_exploit_and_score(live):
         playwright.expect(page.locator("#flag-score")).to_contain_text("1/8")
         shot(page, "7-flags")
 
+        # Attacks tab: run the built-in catalogue against this lab's own sites and watch the score advance.
+        page.locator(".tab[data-tab=attacks]").click()
+        page.locator("#attack-run").click()
+        playwright.expect(page.locator("#attack-results tbody tr").first).to_be_visible(timeout=180_000)
+        hit_cats = page.locator("#attack-results tbody tr:has(td:text-is('HIT')) td:nth-child(3)").all_inner_texts()
+        assert "idor" in hit_cats and "traversal" in hit_cats, hit_cats
+        shot(page, "8-attacks")
+        page.locator(".tab[data-tab=flags]").click()
+        playwright.expect(page.locator("#flag-score")).to_contain_text("/8")
+        score_now = page.locator("#flag-score").inner_text()
+        assert not score_now.startswith("1/"), f"attack did not advance the score: {score_now}"
+
+        row.get_by_role("button", name="purge").click()
+        page.locator("#labs tbody tr", has_text=name).wait_for(state="detached", timeout=120_000)
+        browser.close()
+    assert not problems, problems
+
+
+def test_ui_launch_with_disabled_vuln_class(live):
+    rt, url = live
+    name = f"nov{os.getpid() % 1000}"
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROME, headless=True) if CHROME else p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1100})
+        problems = []
+        page.on("console", lambda m: problems.append(m.text) if m.type == "error" else None)
+        page.on("pageerror", lambda e: problems.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(url)
+        page.wait_for_selector("#conn.ok")
+        form = page.locator("#gen")
+        form.locator("input[name=name]").fill(name)
+        form.locator("input[name=departments]").fill("1")
+        form.locator("input[name=hosts_per_dept]").fill("0")
+        form.locator("input[name=sites]").fill("1")
+        form.locator("input[name=public_sites]").fill("0")
+        for box in ("database", "fileserver", "mgmt", "guest"):
+            form.locator(f"input[name={box}]").uncheck()
+        form.locator("input[name=v_sqli]").uncheck()          # turn SQLi off for the sites
+        form.locator("input[name=port_offset]").fill("27000")
+        form.locator("select[name=difficulty]").select_option("easy")
+        playwright.expect(form.locator("button[type=submit]")).to_be_enabled()
+        form.locator("button[type=submit]").click()
+
+        row = page.locator("#labs tbody tr", has_text=name)
+        row.locator("td:nth-child(5) .pill.ok").wait_for(timeout=240_000)
+        row.click()
+        page.locator(".tab[data-tab=attacks]").click()
+        page.locator("#attack-run").click()
+        playwright.expect(page.locator("#attack-results tbody tr").first).to_be_visible(timeout=180_000)
+        rows = page.locator("#attack-results tbody tr")
+        sqli_row = rows.filter(has=page.locator("td:nth-child(3):text-is('sqli')"))
+        playwright.expect(sqli_row.locator("td:first-child")).to_have_text("—")  # SQLi disabled -> miss
+        idor_hit = rows.filter(has=page.locator("td:text-is('HIT')")).filter(
+            has=page.locator("td:nth-child(3):text-is('idor')"))
+        playwright.expect(idor_hit).to_have_count(1)                              # idor still vulnerable
+
         row.get_by_role("button", name="purge").click()
         page.locator("#labs tbody tr", has_text=name).wait_for(state="detached", timeout=120_000)
         browser.close()

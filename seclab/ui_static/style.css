@@ -96,3 +96,7 @@ pre { background: #0b0e12; border: 1px solid var(--line); border-radius: 6px; pa
 .flag-list li.done { color: var(--ok); }
 #flag-msg.ok { color: var(--ok); } #flag-msg.bad { color: var(--bad); }
 main > section { min-width: 0; }
+.checks.vulns { grid-column: 1 / -1; align-items: center; }
+.checks.vulns .dim { margin-right: 4px; }
+#attack-cats .cat { margin-right: 10px; font-family: var(--mono); font-size: 12px; }
+#attack-results td:first-child { font-family: var(--mono); }

@@ -24,7 +24,7 @@ func newClient(t *testing.T, level string) *client {
 	for k, v := range testFlags {
 		flags[k] = v
 	}
-	app, err := NewApp(level, "Test", flags, t.TempDir())
+	app, err := NewApp(level, "Test", flags, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

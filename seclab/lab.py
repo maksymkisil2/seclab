@@ -16,6 +16,7 @@ import random
 import secrets
 import shutil
 import socket
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from . import firewall, nginx, sshd
 from .hardening import container_flags, lab_label
-from .images import agent_image, ensure_images, node_image, web_image
+from .images import agent_binary, agent_image, ensure_images, node_image, web_image
 from .pki import ensure_pki
 from .profiles import ContainerPolicy, Profile, get_profile
 from .runtime import ContainerError, Runtime
@@ -45,6 +46,8 @@ SEGMENT_OPTS = [
 DIFFICULTIES = ("easy", "medium", "hard")
 HOLES = {"easy": None, "medium": 6, "hard": 2}  # None = flat firewall
 FLAG_KINDS = ("sqli", "idor", "traversal", "admin")
+VULN_CLASSES = ("sqli", "xss", "idor", "traversal", "admin")  # must match agent VulnClasses
+ATTACK_CATEGORIES = ("sqli", "idor", "traversal", "admin", "creds")  # must match agent catalogue
 
 
 def egress_target() -> tuple[str, int]:
@@ -61,11 +64,17 @@ class Lab:
     port_offset: int = 0
     difficulty: str = "medium"
     seed: int = 0
+    vulns: tuple[str, ...] | None = None  # enabled vuln classes; None = all, () = none
 
     def __post_init__(self) -> None:
         validate_name(self.name)
         if self.difficulty not in DIFFICULTIES:
             raise ValueError(f"difficulty must be one of {DIFFICULTIES}")
+        if self.vulns is not None:
+            bad = set(self.vulns) - set(VULN_CLASSES)
+            if bad:
+                raise ValueError(f"unknown vuln class(es): {', '.join(sorted(bad))}")
+            self.vulns = tuple(c for c in VULN_CLASSES if c in self.vulns)  # canonical order, deduped
         if not self.seed:
             self.seed = secrets.randbelow(2**31 - 1) + 1
         for f in self.topo.forwards:
@@ -101,14 +110,19 @@ class Lab:
 
     # ---- state ------------------------------------------------------------
     def to_state(self) -> dict:
-        return {"kind": "topology", "name": self.name, "scenario": self.scenario,
-                "profile": self.profile.name, "port_offset": self.port_offset,
-                "difficulty": self.difficulty, "seed": self.seed}
+        st = {"kind": "topology", "name": self.name, "scenario": self.scenario,
+              "profile": self.profile.name, "port_offset": self.port_offset,
+              "difficulty": self.difficulty, "seed": self.seed}
+        if self.vulns is not None:
+            st["vulns"] = list(self.vulns)
+        return st
 
     @classmethod
     def from_state(cls, st: dict) -> "Lab":
+        vulns = st.get("vulns")
         return cls(st["name"], load(st["scenario"]), get_profile(st["profile"]), st["scenario"],
-                   st.get("port_offset", 0), st.get("difficulty", "medium"), st.get("seed", 0))
+                   st.get("port_offset", 0), st.get("difficulty", "medium"), st.get("seed", 0),
+                   tuple(vulns) if vulns is not None else None)
 
     # ---- difficulty-driven content -------------------------------------------
     def vulnweb_level(self) -> str:
@@ -158,6 +172,45 @@ class Lab:
                     path.write_text(json.dumps(sorted(solved)))
                     return f"{node}/{kind}"
         return None
+
+    # ---- built-in attack runner (validate your own defenses) ----------------
+    def attack_targets(self) -> list[tuple[str, int]]:
+        """(node, host_port) for each vulnweb site reachable on the host loopback."""
+        out = []
+        for n in self.topo.nodes.values():
+            if n.role == "vulnweb":
+                port = self.host_port(n.name, 8080)
+                if port is not None:
+                    out.append((n.name, port))
+        return out
+
+    def attack(self, only: tuple[str, ...] | None = None, timeout: int = 180) -> list[dict]:
+        """Run the built-in exploit catalogue against this lab's own vulnweb sites.
+
+        Executes the bundled agent on the host against 127.0.0.1:<forwarded port> — the same ports the
+        UI links to. Captured flags are submitted to the scoreboard. Never targets anything but this lab.
+        """
+        if only:
+            bad = set(only) - set(ATTACK_CATEGORIES)
+            if bad:
+                raise ValueError(f"unknown attack categor(ies): {', '.join(sorted(bad))}")
+        binary = str(agent_binary())
+        results: list[dict] = []
+        for node, port in self.attack_targets():
+            cmd = [binary, "attack", "-target", f"http://127.0.0.1:{port}", "-json"]
+            if only:
+                cmd += ["-only", ",".join(only)]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+            if proc.returncode != 0:
+                results.append({"node": node, "category": "-", "captured": False,
+                                "detail": proc.stderr.strip() or "attack runner failed", "error": True})
+                continue
+            for f in json.loads(proc.stdout or "[]"):
+                f["node"] = node
+                results.append(f)
+                if f.get("captured") and f.get("flag"):
+                    self.submit_flag(f["flag"])
+        return results
 
     @classmethod
     def load_state(cls, lab: str) -> "Lab":
@@ -259,9 +312,12 @@ class Lab:
             return ["--entrypoint", "socat", node_image(), f"TCP-LISTEN:{node.ports[0]},fork,reuseaddr",
                     f"SYSTEM:echo seclab-{node.name}"]
         if node.role == "vulnweb":
-            return ["--entrypoint", "/seclab-agent", agent_image(), "vulnweb", "-listen", ":8080",
-                    "-level", self.vulnweb_level(), "-site", node.title or node.name,
-                    "-flags", "/etc/seclab/flags.json", "-files", "/tmp/vulnweb"]
+            cmd = ["--entrypoint", "/seclab-agent", agent_image(), "vulnweb", "-listen", ":8080",
+                   "-level", self.vulnweb_level(), "-site", node.title or node.name,
+                   "-flags", "/etc/seclab/flags.json", "-files", "/tmp/vulnweb"]
+            if self.vulns is not None:  # per-class override; "none" = all classes secure
+                cmd += ["-vulns", ",".join(self.vulns) if self.vulns else "none"]
+            return cmd
         return ["--entrypoint", "sh", node_image(), "-c", sshd.start_script(self.profile)]
 
     def node_args(self, node: Node) -> list[str]:

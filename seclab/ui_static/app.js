@@ -3,6 +3,8 @@
 
 const PROFILES = ["vulnerable", "baseline", "hardened"];
 const DIFFS = ["easy", "medium", "hard"];
+const VULN_CLASSES = ["sqli", "xss", "idor", "traversal", "admin"]; // must match agent/lab
+const ATTACK_CATS = ["sqli", "idor", "traversal", "admin", "creds"]; // must match agent catalogue
 const SVGNS = "http://www.w3.org/2000/svg";
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -210,7 +212,7 @@ function renderDetail(changed = false) {
 function showTab(name) {
   state.tab = name;
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === name);
-  for (const p of ["topo", "check", "fw", "flags"]) $(`#tab-${p}`).classList.toggle("hidden", p !== name);
+  for (const p of ["topo", "check", "fw", "flags", "attacks"]) $(`#tab-${p}`).classList.toggle("hidden", p !== name);
   if (name === "fw") loadFirewall();
   if (name === "flags") loadFlags();
 }
@@ -443,11 +445,61 @@ function initGenerator() {
     const gen = genParams(form);
     const body = { name: gen.name, profile: form.elements.profile.value, difficulty: form.elements.difficulty.value,
                    port_offset: parseInt(form.elements.port_offset.value || "0", 10), seed: gen.seed, generate: gen };
+    const vulns = vulnSelection(form);
+    if (vulns !== null) body.vulns = vulns; // omit when all enabled (server default)
     state.selected = gen.name;
     delete state.topo[gen.name];
     startJob("POST", "/api/labs", body, `up ${gen.name} (generated, ${body.profile}/${body.difficulty})`);
   });
   schedulePreview(form);
+}
+
+// enabled vuln classes from the gen form; null when every class is on (server treats absent = all)
+function vulnSelection(form) {
+  const on = VULN_CLASSES.filter((c) => form.elements["v_" + c] && form.elements["v_" + c].checked);
+  return on.length === VULN_CLASSES.length ? null : on;
+}
+
+// ---- attacks -----------------------------------------------------------------------
+function initAttacks() {
+  const box = $("#attack-cats");
+  for (const c of ATTACK_CATS) {
+    const id = "ac-" + c;
+    box.append(el("label", { class: "cat" },
+      el("input", { type: "checkbox", id, checked: "checked", value: c }), " " + c));
+  }
+  $("#attack-run").addEventListener("click", runAttacks);
+}
+
+function selectedAttackCats() {
+  const on = ATTACK_CATS.filter((c) => $("#ac-" + c).checked);
+  return on.length === ATTACK_CATS.length ? null : on; // null = all
+}
+
+async function runAttacks() {
+  const lab = selectedLab();
+  if (!lab || lab.kind !== "topology") return;
+  const only = selectedAttackCats();
+  const j = await startJob("POST", `/api/labs/${lab.name}/attack`, only ? { only } : {}, `attack ${lab.name}`);
+  if (j && j.state === "done") {
+    renderAttackResults(j.result);
+    loadFlags(); // scoreboard may have advanced
+  }
+}
+
+function renderAttackResults(res) {
+  const tbody = $("#attack-results tbody");
+  tbody.replaceChildren();
+  const rows = res.results || [];
+  const hits = rows.filter((r) => r.captured).length;
+  const msg = $("#attack-msg");
+  msg.textContent = rows.length ? `${hits} captured / ${rows.length} tried` : "no reachable sites";
+  msg.className = "summary " + (hits ? "pill ok" : "pill");
+  for (const r of rows.sort((a, b) => (b.captured - a.captured) || a.node.localeCompare(b.node))) {
+    tbody.append(el("tr", { class: r.captured ? "" : "fail" },
+      el("td", {}, r.captured ? "HIT" : "—"), el("td", {}, r.node || ""), el("td", {}, r.category || ""),
+      el("td", {}, r.technique || ""), el("td", {}, r.flag || ""), el("td", {}, r.detail || "")));
+  }
 }
 
 // ---- wiring ------------------------------------------------------------------------
@@ -462,6 +514,7 @@ function init() {
   $("#flag-submit").addEventListener("click", submitFlag);
   $("#flag-in").addEventListener("keydown", (ev) => { if (ev.key === "Enter") submitFlag(); });
   initGenerator();
+  initAttacks();
   for (const p of PROFILES) {
     const b = el("button", { class: "ghost" }, p);
     b.addEventListener("click", () => {

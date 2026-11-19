@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import firewall, generator, nginx
 from .images import NODE_TAG, build_node_image
-from .lab import DIFFICULTIES, Lab, check, format_report
+from .lab import ATTACK_CATEGORIES, DIFFICULTIES, VULN_CLASSES, Lab, check, format_report
 from .profiles import PROFILES, get_profile
 from .runtime import ContainerError, Runtime
 from .topology import SpecError, builtin_scenarios, load
@@ -61,6 +61,9 @@ def _parser() -> argparse.ArgumentParser:
     lu.add_argument("--difficulty", default="medium", choices=DIFFICULTIES,
                     help="vulnerable profile: app level + firewall (easy=flat, medium=6 holes, hard=2 holes)")
     lu.add_argument("--seed", type=int, default=0, help="reproducible holes/flags (0 = random)")
+    lu.add_argument("--vulns", default=None,
+                    help=f"enabled vuln classes on sites, comma list from {','.join(VULN_CLASSES)}; "
+                         "'none' = all off (default: all on)")
     gen = lab.add_parser("generate", help="generate a corporate network spec (TOML)")
     defaults = generator.Params()
     for field, value in vars(defaults).items():
@@ -76,6 +79,9 @@ def _parser() -> argparse.ArgumentParser:
     fl.add_argument("value")
     sc = lab.add_parser("score")
     sc.add_argument("--name", required=True)
+    at = lab.add_parser("attack", help="run the built-in exploit catalogue against your own lab sites")
+    at.add_argument("--name", required=True)
+    at.add_argument("--only", help=f"categories, comma list from {','.join(ATTACK_CATEGORIES)}")
     for name, hlp in (("down", None), ("reset", "purge and recreate"), ("check", "audit reachability vs target policy")):
         sp = lab.add_parser(name, help=hlp)
         sp.add_argument("--name", required=True)
@@ -95,6 +101,18 @@ def _parser() -> argparse.ArgumentParser:
     fr.add_argument("scenario")
     fr.add_argument("--level", default="hardened", choices=list(PROFILES))
     return p
+
+
+def parse_vuln_arg(value: str) -> tuple[str, ...]:
+    """'none' -> (); comma list -> that set of classes (validated); error otherwise."""
+    value = value.strip()
+    if value == "none":
+        return ()
+    classes = tuple(c.strip() for c in value.split(",") if c.strip())
+    bad = set(classes) - set(VULN_CLASSES)
+    if bad:
+        raise ValueError(f"unknown vuln class(es): {', '.join(sorted(bad))} (known: {','.join(VULN_CLASSES)})")
+    return classes
 
 
 def _lab_cmd(a) -> int:
@@ -123,7 +141,9 @@ def _lab_cmd(a) -> int:
     if a.action == "up":
         topo = load(a.scenario)
         scenario = a.scenario if a.scenario in builtin_scenarios() else str(Path(a.scenario).resolve())
-        lab = Lab(a.name or topo.name, topo, get_profile(a.profile), scenario, a.port_offset, a.difficulty, a.seed)
+        vulns = None if a.vulns is None else parse_vuln_arg(a.vulns)
+        lab = Lab(a.name or topo.name, topo, get_profile(a.profile), scenario, a.port_offset, a.difficulty,
+                  a.seed, vulns)
         lab.up(rt)
         print(f"up {lab.name}  scenario={a.scenario}  profile={lab.profile.name}  difficulty={lab.difficulty}  "
               f"seed={lab.seed}  dir={lab.lab_dir}")
@@ -147,6 +167,20 @@ def _lab_cmd(a) -> int:
         print(f"{len(sc['solved'])}/{len(sc['total'])} flags")
         for item in sc["total"]:
             print(f"  [{'x' if item in sc['solved'] else ' '}] {item}")
+        return 0
+    if a.action == "attack":
+        only = tuple(c.strip() for c in a.only.split(",") if c.strip()) if a.only else None
+        results = lab.attack(only)
+        if not results:
+            print("no reachable vulnweb sites in this lab")
+            return 0
+        captured = 0
+        for r in sorted(results, key=lambda r: (not r.get("captured"), r["node"], r.get("category", ""))):
+            mark = "HIT" if r.get("captured") else "—"
+            captured += bool(r.get("captured"))
+            print(f"{mark:3} {r['node']:12} {r.get('category', '-'):10} {r.get('technique', ''):28} "
+                  f"{r.get('flag', '')} {r.get('detail', '')}")
+        print(f"\n{captured} flag(s) captured; see 'seclab lab score --name {a.name}'")
         return 0
     if a.action == "reset":
         lab.reset(rt)

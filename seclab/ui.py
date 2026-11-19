@@ -23,7 +23,7 @@ from importlib import resources
 
 from . import firewall, generator
 from .hardening import LABEL_MANAGED
-from .lab import DIFFICULTIES, Lab, check
+from .lab import ATTACK_CATEGORIES, DIFFICULTIES, VULN_CLASSES, Lab, check
 from .profiles import PROFILES, get_profile
 from .runtime import Runtime
 from .topology import builtin_scenarios, load
@@ -126,6 +126,18 @@ def web_scenario_info() -> dict:
             "allows": [{"from": "web", "to": "app", "ports": [8080]}]}
 
 
+def _parse_vulns(value) -> tuple[str, ...] | None:
+    """None/absent -> None (all classes on); a list -> that set ([] = all off); validated."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "vulns must be a list of class names")
+    bad = set(value) - set(VULN_CLASSES)
+    if bad:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown vuln class(es): {', '.join(sorted(bad))}")
+    return tuple(c for c in VULN_CLASSES if c in value)
+
+
 class Engine:
     def __init__(self, rt: Runtime):
         self.rt = rt
@@ -226,6 +238,7 @@ class Engine:
         if difficulty not in DIFFICULTIES:
             raise ApiError(HTTPStatus.BAD_REQUEST, "bad difficulty")
         seed = int(body.get("seed") or 0)
+        vulns = _parse_vulns(body.get("vulns"))
         if isinstance(body.get("generate"), dict):
             params = generator.params_from({**body["generate"], "name": body.get("name") or "corp"})
             spec = generator.generate(params)
@@ -233,9 +246,23 @@ class Engine:
         elif scenario not in builtin_scenarios():
             raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown scenario '{scenario}'")
         topo = load(scenario)
-        lab = Lab(validate_name(body.get("name") or topo.name), topo, profile, scenario, offset, difficulty, seed)
+        lab = Lab(validate_name(body.get("name") or topo.name), topo, profile, scenario, offset, difficulty,
+                  seed, vulns)
         lab.up(self.rt)
         return {"name": lab.name}
+
+    def attack(self, name: str, body: dict) -> dict:
+        lab = self.topo_lab(name)
+        only = body.get("only")
+        if only is not None:
+            if not isinstance(only, list) or not all(isinstance(c, str) for c in only):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "only must be a list of category names")
+            only = tuple(only) or None
+        try:
+            results = lab.attack(only)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc)) from None
+        return {"results": results, "categories": list(ATTACK_CATEGORIES), **lab.score()}
 
     def reset(self, name: str) -> dict:
         st = self._state(name)
@@ -286,6 +313,7 @@ ROUTES = [
     ("GET", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/topology$"), "topology"),
     ("GET", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/flags$"), "flags"),
     ("POST", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/flags$"), "submit"),
+    ("POST", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/attack$"), "attack"),
 ]
 
 
@@ -391,6 +419,9 @@ def make_handler(engine: Engine, jobs: Jobs, token: str, port: int):
             if action == "check":
                 engine.topo_lab(name)  # fail fast for web labs / unknown labs
                 return jobs.start(name, "check", lambda: engine.check(name))
+            if action == "attack":
+                engine.topo_lab(name)  # fail fast for web labs / unknown labs
+                return jobs.start(name, "attack", lambda: engine.attack(name, body))
             if action == "preview":
                 return engine.preview(body)
             if action == "topology":

@@ -112,3 +112,42 @@ def test_busy_port_is_rejected_before_anything_is_created(rt):
         with pytest.raises(Exception, match=f"{port}.*in use"):
             lab.up(rt)
     assert not rt.container_ids(lab_label(name)) and not rt.network_ids(lab_label(name))
+
+
+def test_builtin_attack_runner_captures_and_scores(rt):
+    lab = _lab(rt, "vulnerable", "easy", f"atk{os.getpid() % 100}")
+    try:
+        results = lab.attack()
+        hits = {(r["node"], r["category"]) for r in results if r.get("captured")}
+        # both generated sites, every category lands at easy
+        sites = [n.name for n in lab.topo.nodes.values() if n.role == "vulnweb"]
+        for site in sites:
+            for cat in ("sqli", "idor", "traversal", "admin"):
+                assert (site, cat) in hits, (site, cat, results)
+        # captured flags went to the scoreboard
+        assert set(lab.score()["solved"]) >= {f"{s}/sqli" for s in sites}
+        # scoped: refuses to aim anywhere but loopback (checked at the binary)
+        import subprocess
+        from seclab.images import agent_binary
+        p = subprocess.run([str(agent_binary()), "attack", "-target", "http://10.0.0.5:80"],
+                           capture_output=True, text=True)
+        assert p.returncode == 2 and "loopback" in p.stderr
+    finally:
+        teardown(rt, lab.name, purge=True)
+
+
+def test_per_vuln_toggle_removes_a_class_end_to_end(rt):
+    name = f"tog{os.getpid() % 100}"
+    params = generator.Params(name=name, departments=1, hosts_per_dept=0, sites=1, public_sites=0,
+                              database=False, fileserver=False, mgmt=False, guest=False, base=132)
+    path = generator.save(generator.generate(params), seclab_home())
+    lab = Lab(name, generator.build(params), get_profile("vulnerable"), str(path), OFFSET + 70, "easy",
+              seed=5, vulns=("idor", "traversal"))
+    teardown(rt, name, purge=True)
+    lab.up(rt)
+    try:
+        hits = {r["category"] for r in lab.attack() if r.get("captured")}
+        assert "idor" in hits and "traversal" in hits
+        assert "sqli" not in hits and "admin" not in hits  # disabled classes behave securely
+    finally:
+        teardown(rt, name, purge=True)
