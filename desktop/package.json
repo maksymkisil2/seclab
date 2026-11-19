@@ -1,0 +1,31 @@
+{
+  "name": "seclab-desktop",
+  "productName": "seclab",
+  "version": "0.4.0",
+  "description": "Desktop shell for seclab: corporate network lab for administration and security training",
+  "main": "main.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/backend.test.js",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win nsis --publish never",
+    "dist:linux": "electron-builder --linux AppImage deb --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0"
+  },
+  "build": {
+    "appId": "local.seclab.desktop",
+    "productName": "seclab",
+    "files": ["main.js", "backend.js", "splash.html", "build/icon.png"],
+    "directories": { "output": "dist", "buildResources": "build" },
+    "win": { "target": ["nsis"], "artifactName": "seclab-setup-${version}.${ext}" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true,
+              "createDesktopShortcut": true, "createStartMenuShortcut": true },
+    "linux": { "target": ["AppImage", "deb"], "category": "Development", "artifactName": "seclab-${version}.${ext}",
+               "maintainer": "seclab" }
+  }
+}

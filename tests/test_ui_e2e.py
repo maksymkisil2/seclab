@@ -10,6 +10,8 @@ import os
 import re
 import shutil
 import threading
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -81,12 +83,13 @@ def test_ui_full_flow(live):
         assert "#t=" not in page.url                                     # token stripped from the address bar
         card = page.locator(".card", has=page.locator(".s-name", has_text=re.compile(r"^dmz$")))
         card.locator("select[name=profile]").select_option("hardened")
+        card.locator("select[name=difficulty]").select_option("easy")
         card.locator("input[name=name]").fill(LAB)
         card.locator("input[name=port_offset]").fill("23000")
         card.locator("button[type=submit]").click()
 
         row = page.locator("#labs tbody tr", has_text=LAB)
-        row.locator("td:nth-child(4) .pill.ok").wait_for(timeout=180_000)  # state 'up'
+        row.locator("td:nth-child(5) .pill.ok").wait_for(timeout=180_000)  # state 'up'
         row.click()
         page.wait_for_selector("#topo svg .t-node")
         assert page.locator("#topo .t-node").count() == 5
@@ -125,3 +128,62 @@ def test_ui_full_flow(live):
 
     assert not problems, problems
     assert not rt.container_ids(f"seclab.lab={LAB}")
+
+
+def test_ui_generate_exploit_and_score(live):
+    rt, url = live
+    name = f"gen{os.getpid() % 1000}"
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=CHROME, headless=True) if CHROME else p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 1100})
+        problems = []
+        page.on("console", lambda m: problems.append(m.text) if m.type == "error" else None)
+        page.on("pageerror", lambda e: problems.append(str(e)))
+        page.on("dialog", lambda d: d.accept())
+        page.goto(url)
+        page.wait_for_selector("#conn.ok")
+        form = page.locator("#gen")
+        form.locator("input[name=name]").fill(name)
+        form.locator("input[name=departments]").fill("1")
+        form.locator("input[name=hosts_per_dept]").fill("1")
+        form.locator("input[name=sites]").fill("2")
+        form.locator("input[name=public_sites]").fill("1")
+        form.locator("input[name=fileserver]").uncheck()
+        form.locator("input[name=port_offset]").fill("26000")
+        form.locator("select[name=difficulty]").select_option("easy")
+        playwright.expect(page.locator("#gen-est")).to_contain_text("containers")
+        form.locator("input[name=sites]").fill("9")                       # invalid -> launch disabled
+        playwright.expect(page.locator("#gen-est.bad")).to_contain_text("sites")
+        assert form.locator("button[type=submit]").is_disabled()
+        form.locator("input[name=sites]").fill("2")
+        playwright.expect(form.locator("button[type=submit]")).to_be_enabled()
+        shot(page, "5-generator")
+        form.locator("button[type=submit]").click()
+
+        row = page.locator("#labs tbody tr", has_text=name)
+        row.locator("td:nth-child(5) .pill.ok").wait_for(timeout=240_000)
+        row.click()
+        playwright.expect(page.locator("#access")).to_contain_text("Corp Portal")
+        access = page.locator("#access").inner_text()
+        port = int(re.search(r"portal:8080 .*localhost:(\d+)", access).group(1))
+        shot(page, "6-generated-topology")
+
+        q = urllib.parse.quote("zz' UNION SELECT name, value FROM secrets WHERE name LIKE '")
+        body = urllib.request.urlopen(f"http://127.0.0.1:{port}/directory?q={q}", timeout=5).read().decode()
+        flag = re.search(r"FLAG\{sqli-[0-9a-f]{12}\}", body).group(0)
+
+        page.locator(".tab[data-tab=flags]").click()
+        playwright.expect(page.locator("#flag-score")).to_contain_text("0/8")
+        page.locator("#flag-in").fill("FLAG{wrong}")
+        page.locator("#flag-submit").click()
+        playwright.expect(page.locator("#flag-msg.bad")).to_have_text("wrong flag")
+        page.locator("#flag-in").fill(flag)
+        page.locator("#flag-in").press("Enter")
+        playwright.expect(page.locator("#flag-msg.ok")).to_contain_text("portal/sqli")
+        playwright.expect(page.locator("#flag-score")).to_contain_text("1/8")
+        shot(page, "7-flags")
+
+        row.get_by_role("button", name="purge").click()
+        page.locator("#labs tbody tr", has_text=name).wait_for(state="detached", timeout=120_000)
+        browser.close()
+    assert not problems, problems

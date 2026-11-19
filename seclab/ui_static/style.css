@@ -17,7 +17,7 @@ h3 { font-size: 13px; margin: 6px 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; }
 .s-desc { margin: 4px 0; }
-.launch { display: grid; grid-template-columns: 1.25fr 1fr 84px; gap: 6px; margin-top: 8px; }
+.launch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .launch > * { min-width: 0; width: 100%; }
 .launch button { grid-column: 1 / -1; }
 input, select, textarea { background: #0b0e12; color: var(--text); border: 1px solid var(--line);
@@ -82,3 +82,17 @@ pre { background: #0b0e12; border: 1px solid var(--line); border-radius: 6px; pa
 .t-ingress { stroke: var(--warn); stroke-dasharray: 4 3; }
 .t-small { fill: var(--dim); font: 11px var(--mono); }
 .policy { padding: 8px 12px; }
+.gen { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.gen label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--dim); }
+.gen label > * { min-width: 0; width: 100%; }
+.gen .checks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.gen .checks label { flex-direction: row; align-items: center; gap: 5px; }
+.gen .checks input { width: auto; }
+.gen .est, .gen button { grid-column: 1 / -1; }
+.est.bad { color: var(--bad); }
+.flag-in { min-width: 320px; font-family: var(--mono); }
+.flag-list { font: 13px var(--mono); list-style: none; padding: 0; columns: 2; }
+.flag-list li { padding: 2px 0; }
+.flag-list li.done { color: var(--ok); }
+#flag-msg.ok { color: var(--ok); } #flag-msg.bad { color: var(--bad); }
+main > section { min-width: 0; }

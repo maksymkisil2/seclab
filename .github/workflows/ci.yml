@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: agent (go vet + exploit matrix)
+        run: cd agent && go vet ./... && go test ./...
+      - name: agent binaries
+        run: ./agent/build.sh
+      - name: python unit
+        run: pip install pytest && python -m pytest -q tests/test_unit.py tests/test_lab_unit.py tests/test_ui_unit.py tests/test_generator_unit.py
+      - name: desktop launcher
+        run: cd desktop && node --test test/backend.test.js
+      - uses: actions/upload-artifact@v4
+        with: { name: agent-bin, path: seclab/bin/ }
+
+  integration:
+    # Real images (nginx:1.27-alpine, alpine-based seclab/node): covers what the offline stub cannot (nginx, sshd).
+    needs: unit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/download-artifact@v4
+        with: { name: agent-bin, path: seclab/bin/ }
+      - name: docker version (needs >= 28)
+        run: docker version --format '{{.Server.Version}}'
+      - name: test deps
+        run: pip install pytest playwright && python -m playwright install --with-deps chromium
+      - name: self-test on real images
+        run: chmod +x seclab/bin/* && ./selftest/run.sh
+
+  installer-linux:
+    needs: unit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: agent-bin, path: seclab/bin/ }
+      - name: install.sh on a clean runner
+        run: chmod +x seclab/bin/* && ./install/install.sh --no-desktop && ~/.local/bin/seclab lab list
+
+  desktop:
+    needs: unit
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, script: "dist:win" }
+          - { os: ubuntu-24.04, script: "dist:linux" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: build installer
+        working-directory: desktop
+        run: npm install --no-audit --no-fund && npm run ${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+
+  release-bundle:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [integration, installer-linux, desktop]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: assemble bundle (engine + agent binaries + desktop installers)
+        run: |
+          mkdir -p bundle && git archive HEAD | tar -x -C bundle
+          mkdir -p bundle/seclab/bin bundle/dist
+          cp artifacts/agent-bin/* bundle/seclab/bin/ && chmod +x bundle/seclab/bin/*
+          cp artifacts/desktop-*/* bundle/dist/ 2>/dev/null || true
+          tar -czf "seclab-${GITHUB_REF_NAME}.tar.gz" -C bundle .
+          (cd bundle && zip -qr "../seclab-${GITHUB_REF_NAME}.zip" .)
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            seclab-*.tar.gz
+            seclab-*.zip

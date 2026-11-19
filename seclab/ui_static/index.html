@@ -20,6 +20,27 @@
 
 <main>
   <section class="col-left">
+    <h2>Generate corporate network</h2>
+    <form id="gen" class="card gen">
+      <label>name <input name="name" value="corp" pattern="[a-z][a-z0-9\-]{0,14}" maxlength="15"></label>
+      <label>departments <input name="departments" type="number" min="1" max="6" value="2"></label>
+      <label>hosts / dept <input name="hosts_per_dept" type="number" min="0" max="8" value="2"></label>
+      <label>intranet sites <input name="sites" type="number" min="1" max="5" value="2"></label>
+      <label>public sites <input name="public_sites" type="number" min="0" max="5" value="1"></label>
+      <label>seed <input name="seed" type="number" min="1" max="999999" value="1"></label>
+      <div class="checks">
+        <label><input type="checkbox" name="database" checked> database</label>
+        <label><input type="checkbox" name="fileserver" checked> file server</label>
+        <label><input type="checkbox" name="mail"> mail</label>
+        <label><input type="checkbox" name="mgmt" checked> mgmt jump</label>
+        <label><input type="checkbox" name="guest" checked> guest net</label>
+      </div>
+      <label>profile <select name="profile"></select></label>
+      <label>difficulty <select name="difficulty"></select></label>
+      <label>port offset <input name="port_offset" type="number" min="0" max="50000" value="0"></label>
+      <div id="gen-est" class="est dim small"></div>
+      <button type="submit">Generate &amp; launch</button>
+    </form>
     <h2>Scenarios</h2>
     <div id="scenarios"></div>
   </section>
@@ -27,7 +48,7 @@
   <section class="col-main">
     <h2>Labs <button id="refresh" class="ghost" title="Refresh">↻</button></h2>
     <table id="labs" class="grid">
-      <thead><tr><th>lab</th><th>scenario</th><th>profile</th><th>state</th><th>containers</th><th></th></tr></thead>
+      <thead><tr><th>lab</th><th>scenario</th><th>profile</th><th>difficulty</th><th>state</th><th>containers</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
     <p id="labs-empty" class="dim hidden">No labs yet — launch a scenario on the left.</p>
@@ -39,6 +60,7 @@
           <button data-tab="topo" class="tab active">Topology</button>
           <button data-tab="check" class="tab">Audit</button>
           <button data-tab="fw" class="tab">Firewall</button>
+          <button data-tab="flags" class="tab">Flags</button>
         </div>
       </div>
 
@@ -57,6 +79,18 @@
           <thead><tr><th></th><th>kind</th><th>from</th><th>to</th><th>port</th><th>expected</th><th>actual</th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+
+      <div id="tab-flags" class="tabpane hidden">
+        <div class="row">
+          <input id="flag-in" placeholder="FLAG{...}" maxlength="200" class="flag-in">
+          <button id="flag-submit">Submit</button>
+          <span id="flag-msg"></span>
+        </div>
+        <div id="flag-score" class="summary"></div>
+        <ul id="flag-list" class="flag-list"></ul>
+        <p class="dim small">Each vulnerable site hides 4 flags: sqli (secrets table), idor (admin note),
+          traversal (private file), admin (admin panel). Levels: easy → medium → hard filters; hardened = secure.</p>
       </div>
 
       <div id="tab-fw" class="tabpane hidden">
@@ -89,6 +123,7 @@
     <div class="s-meta dim small"></div>
     <form class="launch">
       <select name="profile"></select>
+      <select name="difficulty"></select>
       <input name="name" placeholder="lab name" pattern="[a-z0-9][a-z0-9\-]{0,30}" maxlength="31">
       <input name="port_offset" type="number" min="0" max="50000" step="1" value="0" title="port offset">
       <button type="submit">Launch</button>

@@ -3,3 +3,8 @@ __pycache__/
 .pytest_cache/
 selftest/stub/stub
 *.egg-info/
+seclab/bin/seclab-agent-*
+build/
+dist/
+desktop/node_modules/
+desktop/dist/

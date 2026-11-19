@@ -2,10 +2,11 @@
 // seclab UI. No frameworks, no innerHTML with data: everything goes through textContent / DOM APIs.
 
 const PROFILES = ["vulnerable", "baseline", "hardened"];
+const DIFFS = ["easy", "medium", "hard"];
 const SVGNS = "http://www.w3.org/2000/svg";
 const $ = (sel, root = document) => root.querySelector(sel);
 
-const state = { token: null, scenarios: [], labs: [], selected: null, results: {}, tab: "topo" };
+const state = { token: null, scenarios: [], labs: [], selected: null, results: {}, tab: "topo", topo: {} };
 
 // ---- token -----------------------------------------------------------------------
 (function initToken() {
@@ -76,6 +77,7 @@ async function trackJob(job, label) {
     t.remove();
     const secs = Math.round(j.finished - j.started);
     if (j.state === "done") toast(`${label}: done (${secs}s)`, "ok");
+    if (j.lab) delete state.topo[j.lab];
     else toast(`${label}: failed\n${j.error}`, "bad");
     refreshLabs();
     return j;
@@ -107,11 +109,15 @@ async function loadScenarios() {
     const form = $("form", card);
     const sel = form.elements.profile;
     for (const p of PROFILES) sel.append(el("option", { value: p }, p));
+    const dsel = form.elements.difficulty;
+    for (const d of DIFFS) dsel.append(el("option", { value: d }, d));
+    dsel.value = "medium";
+    if (s.kind === "web") dsel.classList.add("hidden");
     form.elements.name.placeholder = s.name;
     form.addEventListener("submit", (ev) => {
       ev.preventDefault();
       const name = form.elements.name.value.trim() || s.name;
-      const body = { scenario: s.name, profile: sel.value, name,
+      const body = { scenario: s.name, profile: sel.value, name, difficulty: dsel.value,
                      port_offset: parseInt(form.elements.port_offset.value || "0", 10) };
       state.selected = name;
       startJob("POST", "/api/labs", body, `up ${name} (${sel.value})`);
@@ -157,7 +163,8 @@ function renderLabs() {
     const st = el("span", { class: "pill " + stateClass(lab.state) }, lab.busy ? "busy" : lab.state);
     const up = lab.containers.filter((c) => c.state === "running").length;
     const tr = el("tr", { class: lab.name === state.selected ? "sel" : "" },
-      el("td", {}, lab.name), el("td", {}, lab.scenario.split("/").pop()), el("td", {}, lab.profile),
+      el("td", {}, lab.name), el("td", {}, lab.scenario.split("/").pop().replace(/\.toml$/, "")),
+      el("td", {}, lab.profile), el("td", {}, lab.difficulty || "—"),
       el("td", {}, st), el("td", {}, `${up}/${lab.containers.length}`), el("td", {}, acts));
     tr.addEventListener("click", () => { state.selected = lab.name; renderLabs(); renderDetail(true); });
     tbody.append(tr);
@@ -166,14 +173,23 @@ function renderLabs() {
 
 function selectedLab() { return state.labs.find((l) => l.name === state.selected); }
 
-function scenarioFor(lab) { return state.scenarios.find((s) => s.name === lab.scenario); }
+function scenarioFor(lab) { return state.topo[lab.name]; }
+
+async function fetchTopology(name) {
+  try {
+    state.topo[name] = await api("GET", `/api/labs/${name}/topology`);
+  } catch (_) {
+    state.topo[name] = null;
+  }
+}
 
 // ---- detail ------------------------------------------------------------------------
 function renderDetail(changed = false) {
   const lab = selectedLab();
   $("#detail").classList.toggle("hidden", !lab);
   if (!lab) return;
-  $("#d-title").textContent = `${lab.name} · ${lab.profile}`;
+  if (!(lab.name in state.topo)) { fetchTopology(lab.name).then(() => renderDetail()); }
+  $("#d-title").textContent = `${lab.name} · ${lab.profile}` + (lab.difficulty ? ` · ${lab.difficulty}` : "");
   const topoOnly = lab.kind === "topology";
   for (const b of document.querySelectorAll(".tab")) {
     if (b.dataset.tab !== "topo") b.disabled = !topoOnly;
@@ -188,8 +204,9 @@ function renderDetail(changed = false) {
 function showTab(name) {
   state.tab = name;
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === name);
-  for (const p of ["topo", "check", "fw"]) $(`#tab-${p}`).classList.toggle("hidden", p !== name);
+  for (const p of ["topo", "check", "fw", "flags"]) $(`#tab-${p}`).classList.toggle("hidden", p !== name);
   if (name === "fw") loadFirewall();
+  if (name === "flags") loadFlags();
 }
 
 function renderAccess(lab) {
@@ -205,7 +222,9 @@ function renderAccess(lab) {
       const how = node && node.role === "ssh"
         ? (lab.profile === "vulnerable" ? `ssh -p ${port} root@127.0.0.1   (toor)`
                                         : `ssh -i ${lab.dir}/ssh/id_ecdsa -p ${port} lab@127.0.0.1`)
-        : f.port === 8443 ? `https://localhost:${port}/` : `127.0.0.1:${port}`;
+        : f.port === 8443 ? `https://localhost:${port}/`
+        : f.port === 8080 ? `http://localhost:${port}/` + (node && node.title ? `   (${node.title})` : "")
+        : `127.0.0.1:${port}`;
       box.append(el("div", {}, `${f.node}:${f.port}  ←  ${how}`));
     }
   }
@@ -229,7 +248,7 @@ function renderTopology(lab) {
   const box = $("#topo");
   box.replaceChildren();
   const sc = scenarioFor(lab);
-  if (!sc) { box.append(el("p", { class: "dim" }, "Custom scenario file: topology view not available.")); return; }
+  if (!sc) { box.append(el("p", { class: "dim" }, "Loading topology…")); return; }
   const verdict = nodeVerdicts(lab.name);
   const segW = 240, gap = 24, nodeH = 46;
   const ry = 20, fwdLines = sc.forwards.length;
@@ -345,6 +364,86 @@ async function applyFirewall(body, label) {
   }
 }
 
+// ---- flags -------------------------------------------------------------------------
+function renderScore(sc) {
+  $("#flag-score").textContent = `${sc.solved.length}/${sc.total.length} flags captured`;
+  $("#flag-score").className = "summary pill " + (sc.total.length && sc.solved.length === sc.total.length ? "ok" : "warn");
+  const list = $("#flag-list");
+  list.replaceChildren();
+  for (const item of sc.total) {
+    const done = sc.solved.includes(item);
+    list.append(el("li", { class: done ? "done" : "" }, (done ? "✓ " : "· ") + item));
+  }
+  if (!sc.total.length) list.append(el("li", { class: "dim" }, "no vulnerable sites in this lab"));
+}
+
+async function loadFlags() {
+  const lab = selectedLab();
+  if (!lab || lab.kind !== "topology") return;
+  try { renderScore(await api("GET", `/api/labs/${lab.name}/flags`)); } catch (e) { toast(e.message, "bad"); }
+}
+
+async function submitFlag() {
+  const lab = selectedLab();
+  const msg = $("#flag-msg");
+  try {
+    const r = await api("POST", `/api/labs/${lab.name}/flags`, { flag: $("#flag-in").value });
+    msg.textContent = r.correct ? `correct: ${r.item}` : "wrong flag";
+    msg.className = r.correct ? "ok" : "bad";
+    if (r.correct) $("#flag-in").value = "";
+    renderScore(r);
+  } catch (e) { msg.textContent = e.message; msg.className = "bad"; }
+}
+
+// ---- generator ---------------------------------------------------------------------
+function genParams(form) {
+  const f = form.elements;
+  const num = (k) => parseInt(f[k].value || "0", 10);
+  return { name: f.name.value.trim() || "corp", departments: num("departments"), hosts_per_dept: num("hosts_per_dept"),
+           sites: num("sites"), public_sites: num("public_sites"), seed: num("seed") || 1,
+           database: f.database.checked, fileserver: f.fileserver.checked, mail: f.mail.checked,
+           mgmt: f.mgmt.checked, guest: f.guest.checked };
+}
+
+let previewTimer = null;
+function schedulePreview(form) {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const est = $("#gen-est");
+    try {
+      const r = await api("POST", "/api/generate/preview", genParams(form));
+      if (!r.valid) throw new Error(r.error);
+      const e = r.estimate;
+      est.textContent = `${e.segments} segments · ${e.containers} containers · RAM limit ${e.ram_limit_mb} MiB ` +
+                        `(typical ~${e.ram_typical_mb} MiB) · ${r.topology.forwards.length} forwarded ports`;
+      est.className = "est dim small";
+      form.querySelector("button[type=submit]").disabled = false;
+    } catch (err) {
+      est.textContent = err.message;
+      est.className = "est small bad";
+      form.querySelector("button[type=submit]").disabled = true;
+    }
+  }, 250);
+}
+
+function initGenerator() {
+  const form = $("#gen");
+  for (const p of PROFILES) form.elements.profile.append(el("option", { value: p }, p));
+  for (const d of DIFFS) form.elements.difficulty.append(el("option", { value: d }, d));
+  form.elements.difficulty.value = "medium";
+  form.addEventListener("input", () => schedulePreview(form));
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const gen = genParams(form);
+    const body = { name: gen.name, profile: form.elements.profile.value, difficulty: form.elements.difficulty.value,
+                   port_offset: parseInt(form.elements.port_offset.value || "0", 10), seed: gen.seed, generate: gen };
+    state.selected = gen.name;
+    delete state.topo[gen.name];
+    startJob("POST", "/api/labs", body, `up ${gen.name} (generated, ${body.profile}/${body.difficulty})`);
+  });
+  schedulePreview(form);
+}
+
 // ---- wiring ------------------------------------------------------------------------
 function init() {
   if (!state.token) { $("#auth").classList.remove("hidden"); setConn(false, "no token"); return; }
@@ -354,6 +453,9 @@ function init() {
   $("#only-fail").addEventListener("change", () => state.selected && renderCheck(state.selected));
   $("#fw-apply").addEventListener("click", () => applyFirewall({ ruleset: $("#fw-edit").value }, "edited ruleset"));
   $("#fw-reload").addEventListener("click", loadFirewall);
+  $("#flag-submit").addEventListener("click", submitFlag);
+  $("#flag-in").addEventListener("keydown", (ev) => { if (ev.key === "Enter") submitFlag(); });
+  initGenerator();
   for (const p of PROFILES) {
     const b = el("button", { class: "ghost" }, p);
     b.addEventListener("click", () => {

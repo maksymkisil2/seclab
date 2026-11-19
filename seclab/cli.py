@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-from . import firewall, nginx
+from . import firewall, generator, nginx
 from .images import NODE_TAG, build_node_image
-from .lab import Lab, check, format_report
+from .lab import DIFFICULTIES, Lab, check, format_report
 from .profiles import PROFILES, get_profile
 from .runtime import ContainerError, Runtime
 from .topology import SpecError, builtin_scenarios, load
-from .web import WebLab, reset, status, teardown
+from .web import WebLab, reset, seclab_home, status, teardown
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -42,10 +43,12 @@ def _parser() -> argparse.ArgumentParser:
     rd.add_argument("--https-port", type=int, default=8443)
 
     ui = sub.add_parser("ui", help="local web interface (127.0.0.1 only)")
-    ui.add_argument("--port", type=int, default=8765)
+    ui.add_argument("--port", type=int, default=8765, help="0 = any free port")
+    ui.add_argument("--json", action="store_true", help="print a JSON ready line (desktop shell)")
+    ui.add_argument("--exit-on-stdin-eof", action="store_true", help="stop when stdin closes (desktop shell)")
 
     img = sub.add_parser("images", help="local images").add_subparsers(dest="action", required=True)
-    img.add_parser("build", help=f"build {NODE_TAG} (router/probe/service/ssh)")
+    img.add_parser("build", help="build seclab/agent + seclab/node, pull nginx (needs internet once)")
 
     lab = sub.add_parser("lab", help="multi-segment scenarios with router firewall").add_subparsers(
         dest="action", required=True)
@@ -55,6 +58,24 @@ def _parser() -> argparse.ArgumentParser:
     lu.add_argument("--name", help="lab instance name (default: scenario name)")
     lu.add_argument("--profile", default="vulnerable", choices=list(PROFILES))
     lu.add_argument("--port-offset", type=int, default=0, help="added to every forwarded host port")
+    lu.add_argument("--difficulty", default="medium", choices=DIFFICULTIES,
+                    help="vulnerable profile: app level + firewall (easy=flat, medium=6 holes, hard=2 holes)")
+    lu.add_argument("--seed", type=int, default=0, help="reproducible holes/flags (0 = random)")
+    gen = lab.add_parser("generate", help="generate a corporate network spec (TOML)")
+    defaults = generator.Params()
+    for field, value in vars(defaults).items():
+        flag = "--" + field.replace("_", "-")
+        if isinstance(value, bool):
+            gen.add_argument(flag, type=lambda v: v.lower() in ("1", "true", "yes", "on"), default=value,
+                             metavar="BOOL")
+        else:
+            gen.add_argument(flag, type=type(value), default=value)
+    gen.add_argument("-o", "--output", help="write TOML here (default: $SECLAB_HOME/specs/<name>.toml)")
+    fl = lab.add_parser("flag", help="submit a captured flag")
+    fl.add_argument("--name", required=True)
+    fl.add_argument("value")
+    sc = lab.add_parser("score")
+    sc.add_argument("--name", required=True)
     for name, hlp in (("down", None), ("reset", "purge and recreate"), ("check", "audit reachability vs target policy")):
         sp = lab.add_parser(name, help=hlp)
         sp.add_argument("--name", required=True)
@@ -82,15 +103,30 @@ def _lab_cmd(a) -> int:
             t = load(str(path))
             print(f"{name:<10} {len(t.segments)} seg / {len(t.nodes)} nodes  {t.description}")
         return 0
+    if a.action == "generate":
+        params = generator.Params(**{k: getattr(a, k) for k in vars(generator.Params())})
+        spec = generator.generate(params)
+        if a.output:
+            path = Path(a.output)
+            path.write_text(generator.to_toml(spec))
+        else:
+            path = generator.save(spec, seclab_home())
+        est = generator.estimate(params)
+        print(f"{path}\n  {est['segments']} segments, {est['containers']} containers, "
+              f"RAM limit {est['ram_limit_mb']} MiB (typical ~{est['ram_typical_mb']} MiB)")
+        print(f"  next: seclab lab up {path} --profile vulnerable --difficulty medium")
+        return 0
     if a.action == "fw" and a.fw_action == "render":
         print(firewall.render(load(a.scenario), a.level), end="")
         return 0
     rt = Runtime.detect()
     if a.action == "up":
         topo = load(a.scenario)
-        lab = Lab(a.name or topo.name, topo, get_profile(a.profile), a.scenario, a.port_offset)
+        scenario = a.scenario if a.scenario in builtin_scenarios() else str(Path(a.scenario).resolve())
+        lab = Lab(a.name or topo.name, topo, get_profile(a.profile), scenario, a.port_offset, a.difficulty, a.seed)
         lab.up(rt)
-        print(f"up {lab.name}  scenario={a.scenario}  profile={lab.profile.name}  dir={lab.lab_dir}")
+        print(f"up {lab.name}  scenario={a.scenario}  profile={lab.profile.name}  difficulty={lab.difficulty}  "
+              f"seed={lab.seed}  dir={lab.lab_dir}")
         for f in topo.forwards:
             print(f"  127.0.0.1:{f.host_port + lab.port_offset:<5} -> {f.node}:{f.port}")
         return 0
@@ -102,6 +138,16 @@ def _lab_cmd(a) -> int:
         print(f"down {a.name}{' (purged)' if a.purge else ''}")
         return 0
     lab = Lab.load_state(a.name)
+    if a.action == "flag":
+        hit = lab.submit_flag(a.value)
+        print(f"correct: {hit}" if hit else "wrong flag")
+        return 0 if hit else 1
+    if a.action == "score":
+        sc = lab.score()
+        print(f"{len(sc['solved'])}/{len(sc['total'])} flags")
+        for item in sc["total"]:
+            print(f"  [{'x' if item in sc['solved'] else ' '}] {item}")
+        return 0
     if a.action == "reset":
         teardown(rt, a.name, purge=True)
         lab.up(rt)
@@ -135,11 +181,17 @@ def main(argv: list[str] | None = None) -> int:
             return _lab_cmd(a)
         if a.cmd == "ui":
             from .ui import serve
-            serve(a.port)
+            serve(a.port, a.json, a.exit_on_stdin_eof)
             return 0
         if a.cmd == "images":
-            build_node_image(Runtime.detect())
+            from .images import AGENT_TAG, build_agent_image, web_image
+            rt = Runtime.detect()
+            build_agent_image(rt)
+            print(f"built {AGENT_TAG} (bundled static binary)")
+            build_node_image(rt)
             print(f"built {NODE_TAG}")
+            rt.ensure_image(web_image())
+            print(f"ready {web_image()}")
             return 0
         if a.cmd == "profiles":
             for prof in PROFILES.values():

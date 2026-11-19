@@ -7,8 +7,17 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 RT=${SECLAB_RUNTIME:-$(command -v docker >/dev/null 2>&1 && echo docker || echo podman)}
 
-echo "== unit"
-python3 -m pytest -q tests/test_unit.py tests/test_lab_unit.py tests/test_ui_unit.py
+echo "== unit: python"
+python3 -m pytest -q tests/test_unit.py tests/test_lab_unit.py tests/test_ui_unit.py tests/test_generator_unit.py
+if command -v go >/dev/null; then
+    echo "== unit: agent (exploit matrix)"
+    (cd agent && go test ./...)
+    ./agent/build.sh >/dev/null
+fi
+if command -v node >/dev/null; then
+    echo "== unit: desktop launcher"
+    (cd desktop && SECLAB_REAL_BACKEND=1 node --test test/backend.test.js 2>&1 | grep -E "^# (pass|fail)")
+fi
 
 if [ "${1:-}" = "--stub" ]; then
     echo "== build stub image"
@@ -29,6 +38,8 @@ python3 -m pytest -q -rs tests/test_integration.py
 echo "== integration: multi-segment labs"
 python3 -m pytest -q -rs tests/test_lab_integration.py
 
+echo "== integration: generated corporate network (real vulnweb)"
+python3 -m pytest -q -rs tests/test_corp_integration.py
 echo "== integration: web UI (browser; skipped without playwright)"
 python3 -m pytest -q -rs tests/test_ui_e2e.py
 

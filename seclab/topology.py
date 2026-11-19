@@ -3,8 +3,8 @@
 Spec:
     name, description
     [segments]            seg = "10.90.10.0/24"   (/16../28, private, non-overlapping)
-    [nodes.<n>]           role = web-proxy|web-static|service|ssh, segment, upstream (web-proxy),
-                          port (service: one TCP listener), ip (optional)
+    [nodes.<n>]           role = web-proxy|web-static|vulnweb|service|ssh, segment, upstream (web-proxy),
+                          port (service: one TCP listener), title (vulnweb), ip (optional)
     [[forward]]           host_port, node, port     host 127.0.0.1:host_port -> router DNAT -> node:port
     [[allow]]             from, to (segment or node), ports   target firewall policy
 """
@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 
-ROLES = ("web-proxy", "web-static", "service", "ssh")
-ROLE_PORTS = {"web-proxy": (8080, 8443), "web-static": (8080,), "ssh": (22,)}
+ROLES = ("web-proxy", "web-static", "vulnweb", "service", "ssh")
+ROLE_PORTS = {"web-proxy": (8080, 8443), "web-static": (8080,), "vulnweb": (8080,), "ssh": (22,)}
+UPSTREAM_ROLES = ("web-static", "vulnweb")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,14}$")
 ROUTER_HOST = -2  # .254 in a /24: last usable address
 FIRST_NODE_HOST = 10
@@ -46,6 +47,7 @@ class Node:
     ip: str
     ports: tuple[int, ...]
     upstream: str | None = None
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -161,15 +163,18 @@ def parse(data: dict) -> Topology:
             ports: tuple[int, ...] = (port,)
         else:
             ports = ROLE_PORTS[role]
-        nodes[nname] = Node(nname, role, seg, str(ip), ports, nd.get("upstream"))
+        title = nd.get("title")
+        if title is not None and (not isinstance(title, str) or not 0 < len(title) <= 40):
+            raise SpecError(f"node '{nname}': title must be 1-40 chars")
+        nodes[nname] = Node(nname, role, seg, str(ip), ports, nd.get("upstream"), title)
     if not nodes:
         raise SpecError("at least one node required")
 
     for n in nodes.values():
         if n.role == "web-proxy":
             up = nodes.get(n.upstream or "")
-            if not up or up.role != "web-static":
-                raise SpecError(f"node '{n.name}': upstream must name a web-static node")
+            if not up or up.role not in UPSTREAM_ROLES:
+                raise SpecError(f"node '{n.name}': upstream must name a web-static or vulnweb node")
 
     forwards: list[Forward] = []
     seen_ports: set[int] = set()

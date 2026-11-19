@@ -1,15 +1,70 @@
 # seclab
 
-Local lab for hardening and audit practice. Python 3.11+ (stdlib only), Docker ≥ 28, openssl CLI.
+Local corporate-network simulator for administration and security practice: segmented networks with an
+nftables router, generated companies of configurable size, vulnerable web apps with difficulty levels and
+flags, reachability audit, desktop app. Python 3.11+ (stdlib only), Docker ≥ 28, Go agent (static binary).
 `seclab web` also runs on Podman.
 
 ## Install
+
+Release archive (engine, agent binaries, desktop installers in `dist/`):
+
+| OS | command | result |
+|---|---|---|
+| Windows 10/11 | `powershell -ExecutionPolicy Bypass -File .\install\install.ps1` (as Administrator) | WSL2 distro `seclab` with Docker Engine + engine, **seclab** app in Start menu |
+| Linux | `./install/install.sh` | Docker ≥ 28 (get.docker.com if needed), engine in `~/.local/share/seclab`, **seclab** app in the menu |
+
+Requirements: 8 GB RAM is enough for small networks, 16 GB for the largest generated ones (≤ 40 containers,
+64 MiB cap each, ~12 MiB typical). Internet is needed once (Docker, alpine, nginx).
+
+From source: `./agent/build.sh` (Go ≥ 1.24) → `pip install -e .` → `seclab images build`.
+Desktop app: `cd desktop && npm install && npm run dist` (or take it from CI artifacts).
+
+## Desktop app
+
+Electron shell around the local UI. On Linux it starts `seclab ui` directly; on Windows it starts it inside
+WSL2 (`wsl.exe -d seclab -u root -- seclab ui …`). The engine stops when the window closes (stdin EOF).
+The window only shows the local UI; every other link opens in the system browser.
+No Electron? `seclab ui` serves the same interface in any browser.
+
+## Corporate network generator
+
 ```sh
-tar xzf seclab-*.tar.gz && cd seclab
-pip install -e .            # optional: gives the `seclab` command; otherwise use `python3 -m seclab`
-seclab images build         # seclab/node:0.2 (alpine + nftables, iproute2, openssh, socat, nc), once
-./selftest/run.sh           # full self-test on real images
+seclab lab generate --departments 3 --hosts-per-dept 2 --sites 3 --public-sites 1 --mail true --seed 7
+seclab lab up ~/.seclab/specs/corp.toml --profile vulnerable --difficulty medium
 ```
+UI: *Generate corporate network* (live container/RAM estimate, invalid sizes are rejected before launch).
+
+| segment | content |
+|---|---|
+| dmz | public reverse proxies (TLS) for public sites |
+| servers | intranet sites (vulnerable web app), database :5432, file server :445, mail :25 |
+| per department | workstations (sshd) |
+| mgmt | admin jump host |
+| guest | guest network, no access anywhere |
+
+Target policy: departments → sites/files/mail, sites → database, proxies → their site, jump → workstations.
+
+## Difficulty
+
+Applies to the `vulnerable` profile (`baseline` / `hardened` deploy secure apps and the target firewall):
+
+| | easy | medium | hard |
+|---|---|---|---|
+| firewall | flat (any → any) | target policy + 6 planted holes | target policy + 2 planted holes |
+| web apps | raw SQLi/XSS/IDOR/traversal, verbose SQL errors, admin:admin, trusted role cookie | naive filters (bypass: `#` comments, `<img onerror>`, `....//`), leaked backup creds | stronger filters (bypass: `/**/` comments, attribute breakout, base64 refs, double URL-encoding) |
+
+Planted holes and flags are derived from `--seed`: same seed, same lab. `lab check` lists exactly the holes.
+
+## Flags
+
+Every vulnerable site (`seclab-agent vulnweb`) hides 4 flags: `sqli` (secrets table via UNION),
+`idor` (another user's note), `traversal` (file outside the web root), `admin` (admin panel).
+```sh
+seclab lab flag --name corp 'FLAG{sqli-…}'
+seclab lab score --name corp
+```
+UI: *Flags* tab. Flags are per lab (HMAC of name + seed); `docker inspect` can reveal them: play fair.
 
 ## Modes
 | command | what |
@@ -73,13 +128,15 @@ Access:
 ## Scenarios (`seclab/scenarios/*.toml`, or any file: `seclab lab up ./my.toml`)
 - `dmz`: web proxy in DMZ, app/db/cache internal, ssh bastion in mgmt
 - `office`: staff LAN, server zone, isolated guest network, admin jump host
+- generated: any size, see *Corporate network generator*
 
 ```toml
 name = "mini"
 [segments]
 front = "10.95.1.0/24"
 back = "10.95.2.0/24"
-[nodes.proxy]                # roles: web-proxy (upstream=web-static), web-static, service (port=N), ssh
+[nodes.proxy]                # roles: web-proxy (upstream=web-static|vulnweb), web-static, vulnweb (title=…),
+                             #        service (port=N), ssh
 role = "web-proxy"
 segment = "front"
 upstream = "site"
@@ -95,6 +152,10 @@ from = "proxy"
 to = "site"
 ports = [8080]
 ```
+
+## Roadmap
+- phase 2: admin services (DNS, DHCP, mail, SMB shares) and a domain (Samba AD: users, groups, policies, Kerberos)
+- phase 3: blue team (central logs, flow sensor / IDS on the router, alerts and incident drills)
 
 ## Self-test
 ```sh

@@ -21,9 +21,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
-from . import firewall
+from . import firewall, generator
 from .hardening import LABEL_MANAGED
-from .lab import Lab, check
+from .lab import DIFFICULTIES, Lab, check
 from .profiles import PROFILES, get_profile
 from .runtime import Runtime
 from .topology import builtin_scenarios, load
@@ -99,16 +99,19 @@ class Jobs:
 
 
 # ---- engine adapters --------------------------------------------------------------
-def scenario_info(name: str) -> dict:
-    t = load(name)
+def topo_info(t, name: str) -> dict:
     return {
         "name": name, "kind": "topology", "description": t.description,
         "segments": [{"name": s.name, "subnet": str(s.subnet), "router_ip": s.router_ip} for s in t.segments.values()],
-        "nodes": [{"name": n.name, "role": n.role, "segment": n.segment, "ip": n.ip, "ports": list(n.ports)}
-                  for n in t.nodes.values()],
+        "nodes": [{"name": n.name, "role": n.role, "segment": n.segment, "ip": n.ip, "ports": list(n.ports),
+                   "title": n.title} for n in t.nodes.values()],
         "forwards": [asdict(f) for f in t.forwards],
         "allows": [{"from": a.src, "to": a.dst, "ports": list(a.ports)} for a in t.allows],
     }
+
+
+def scenario_info(name: str) -> dict:
+    return topo_info(load(name), name)
 
 
 def web_scenario_info() -> dict:
@@ -129,6 +132,37 @@ class Engine:
 
     def scenarios(self) -> list[dict]:
         return [web_scenario_info()] + [scenario_info(n) for n in sorted(builtin_scenarios())]
+
+    def preview(self, body: dict) -> dict:
+        """Validation outcome, not an HTTP error: invalid parameters answer 200 with valid=false."""
+        try:
+            params = generator.params_from(body)
+            spec = generator.generate(params)
+            topo = generator.parse(spec)
+        except (ValueError, TypeError) as exc:
+            return {"valid": False, "error": str(exc)}
+        return {"valid": True, "estimate": generator.estimate(params), "topology": topo_info(topo, spec["name"])}
+
+    def topology(self, name: str) -> dict:
+        st = self._state(name)
+        if st.get("kind") == "web":
+            return web_scenario_info()
+        lab = Lab.from_state(st)
+        info = topo_info(lab.topo, st["scenario"])
+        info.update(difficulty=lab.difficulty, seed=lab.seed, vulnweb_level=lab.vulnweb_level(),
+                    port_offset=lab.port_offset)
+        return info
+
+    def flags(self, name: str) -> dict:
+        return self.topo_lab(name).score()
+
+    def submit(self, name: str, body: dict) -> dict:
+        value = body.get("flag")
+        if not isinstance(value, str) or not 0 < len(value) <= 200:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "flag required")
+        lab = self.topo_lab(name)
+        hit = lab.submit_flag(value)
+        return {"correct": bool(hit), "item": hit, **lab.score()}
 
     def containers(self) -> dict[str, list[dict]]:
         fmt = '{{.Label "seclab.lab"}}\t{{.Label "seclab.role"}}\t{{.Names}}\t{{.State}}\t{{.Status}}'
@@ -160,6 +194,7 @@ class Engine:
                 "name": name, "kind": st.get("kind", "?"),
                 "scenario": st.get("scenario", WEB_SCENARIO if st.get("kind") == "web" else "?"),
                 "profile": st.get("profile", "?"), "port_offset": st.get("port_offset", 0),
+                "difficulty": st.get("difficulty", "") if st.get("kind") == "topology" else "",
                 "http_port": st.get("http_port"), "https_port": st.get("https_port"),
                 "state": "up" if up else ("degraded" if cs else "down"),
                 "containers": cs, "dir": str(root / name),
@@ -187,10 +222,18 @@ class Engine:
             lab = WebLab(name, profile, 8080 + offset, 8443 + offset)
             lab.up(self.rt)
             return {"name": name}
-        if scenario not in builtin_scenarios():
+        difficulty = body.get("difficulty", "medium")
+        if difficulty not in DIFFICULTIES:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "bad difficulty")
+        seed = int(body.get("seed") or 0)
+        if isinstance(body.get("generate"), dict):
+            params = generator.params_from({**body["generate"], "name": body.get("name") or "corp"})
+            spec = generator.generate(params)
+            scenario = str(generator.save(spec, seclab_home()))
+        elif scenario not in builtin_scenarios():
             raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown scenario '{scenario}'")
         topo = load(scenario)
-        lab = Lab(validate_name(body.get("name") or topo.name), topo, profile, scenario, offset)
+        lab = Lab(validate_name(body.get("name") or topo.name), topo, profile, scenario, offset, difficulty, seed)
         lab.up(self.rt)
         return {"name": lab.name}
 
@@ -239,6 +282,10 @@ ROUTES = [
     ("GET", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/fw$"), "fw_show"),
     ("POST", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/fw$"), "fw_apply"),
     ("GET", re.compile(r"^/api/jobs/(?P<job>[a-f0-9]{12})$"), "job"),
+    ("POST", re.compile(r"^/api/generate/preview$"), "preview"),
+    ("GET", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/topology$"), "topology"),
+    ("GET", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/flags$"), "flags"),
+    ("POST", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/flags$"), "submit"),
 ]
 
 
@@ -332,8 +379,9 @@ def make_handler(engine: Engine, jobs: Jobs, token: str, port: int):
             if action == "job":
                 return jobs.get(params["job"])
             if action == "up":
-                label = validate_name(body.get("name") or ("web" if body.get("scenario") == WEB_SCENARIO
-                                                           else str(body.get("scenario") or "x")))
+                default = ("web" if body.get("scenario") == WEB_SCENARIO
+                           else "corp" if body.get("generate") else str(body.get("scenario") or "x"))
+                label = validate_name(body.get("name") or default)
                 return jobs.start(label, "up", lambda: engine.up({**body, "name": label}))
             if action == "down":
                 purge = bool(body.get("purge"))
@@ -343,6 +391,14 @@ def make_handler(engine: Engine, jobs: Jobs, token: str, port: int):
             if action == "check":
                 engine.topo_lab(name)  # fail fast for web labs / unknown labs
                 return jobs.start(name, "check", lambda: engine.check(name))
+            if action == "preview":
+                return engine.preview(body)
+            if action == "topology":
+                return engine.topology(name)
+            if action == "flags":
+                return engine.flags(name)
+            if action == "submit":
+                return engine.submit(name, body)
             if action == "fw_show":
                 return engine.fw_show(name)
             if action == "fw_apply":
@@ -365,9 +421,25 @@ def make_server(port: int = 8765, rt: Runtime | None = None, token: str | None =
     return httpd, token, f"http://127.0.0.1:{real_port}/#t={token}"
 
 
-def serve(port: int = 8765) -> None:
+def serve(port: int = 8765, as_json: bool = False, exit_on_stdin_eof: bool = False) -> None:
+    """as_json: one machine-readable ready line for the desktop shell.
+    exit_on_stdin_eof: stop when the parent closes our stdin (desktop app quit or crashed, incl. via wsl.exe)."""
+    import sys
+
     httpd, _token, url = make_server(port)
-    print(f"seclab ui: {url}\n(Ctrl+C to stop; the token in the URL is required for every API call)")
+    if as_json:
+        print(json.dumps({"event": "ready", "url": url, "port": httpd.server_address[1]}), flush=True)
+    else:
+        print(f"seclab ui: {url}\n(Ctrl+C to stop; the token in the URL is required for every API call)", flush=True)
+    if exit_on_stdin_eof:
+        def watch():
+            try:
+                while sys.stdin.read(1024):
+                    pass
+            except (OSError, ValueError):
+                pass
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+        threading.Thread(target=watch, daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

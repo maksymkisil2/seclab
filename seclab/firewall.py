@@ -12,7 +12,7 @@ Firewall levels follow the lab profile:
 """
 from __future__ import annotations
 
-from .topology import Topology
+from .topology import Allow, Topology
 
 TABLES = ("inet seclab", "ip seclab_nat")
 
@@ -29,7 +29,8 @@ def _ports(ports: tuple[int, ...]) -> str:
     return str(ports[0]) if len(ports) == 1 else "{ " + ", ".join(map(str, ports)) + " }"
 
 
-def render(topo: Topology, level: str) -> str:
+def render(topo: Topology, level: str, extra: list[Allow] | tuple[Allow, ...] = ()) -> str:
+    """extra: additional allow rules (used to plant misconfigurations for training)."""
     if level not in ("vulnerable", "baseline", "hardened"):
         raise ValueError(f"unknown firewall level '{level}'")
     strict = level != "vulnerable"
@@ -72,7 +73,7 @@ def render(topo: Topology, level: str) -> str:
         node = topo.nodes[f.node]
         lines.append(f"        ct status dnat ip daddr {node.ip} tcp dport {f.port} {cnt}accept  # ingress :{f.host_port}")
     if strict:
-        for a in topo.allows:
+        for a in [*topo.allows, *extra]:
             lines.append(
                 f"        ip saddr {topo.cidr(a.src)} ip daddr {topo.cidr(a.dst)} "
                 f"tcp dport {_ports(a.ports)} ct state new {cnt}accept  # {a.src} -> {a.dst}"

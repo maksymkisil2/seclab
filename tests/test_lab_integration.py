@@ -57,8 +57,8 @@ def rt(tmp_path_factory):
         yield r
 
 
-def _up(rt, scenario, profile, name):
-    lab = Lab(name, load(scenario), get_profile(profile), scenario, OFFSET)
+def _up(rt, scenario, profile, name, difficulty="medium"):
+    lab = Lab(name, load(scenario), get_profile(profile), scenario, OFFSET, difficulty)
     teardown(rt, name, purge=True)
     lab.up(rt)
     return lab
@@ -182,7 +182,7 @@ def test_invalid_ruleset_rejected_and_old_kept(rt, dmz):
 
 
 def test_office_vulnerable_has_findings(rt):
-    lab = _up(rt, "office", "vulnerable", f"itoff{os.getpid() % 1000}")
+    lab = _up(rt, "office", "vulnerable", f"itoff{os.getpid() % 1000}", difficulty="easy")
     try:
         bad = _findings(check(rt, lab))
         assert ("route", "guest1", "files", 445) in bad
@@ -190,5 +190,16 @@ def test_office_vulnerable_has_findings(rt):
         assert not any(k in ("egress", "ingress") for k, *_ in bad)
         lab.apply_firewall(rt, firewall.render(lab.topo, "baseline"))
         assert not _findings(check(rt, lab))
+    finally:
+        teardown(rt, lab.name, purge=True)
+
+
+@pytest.mark.parametrize("difficulty, holes", [("medium", 6), ("hard", 2)])
+def test_planted_holes_are_exactly_the_findings(rt, difficulty, holes):
+    lab = _up(rt, "office", "vulnerable", f"ith{difficulty[0]}{os.getpid() % 1000}", difficulty=difficulty)
+    try:
+        planted = {("route", h.src, h.dst, h.ports[0]) for h in lab.holes()}
+        assert len(planted) == holes
+        assert _findings(check(rt, lab)) == planted
     finally:
         teardown(rt, lab.name, purge=True)
