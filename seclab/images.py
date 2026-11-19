@@ -11,7 +11,7 @@ from pathlib import Path
 from .runtime import Runtime
 
 NODE_TAG = "seclab/node:0.2"
-AGENT_TAG = "seclab/agent:0.5"
+AGENT_TAG = "seclab/agent:0.6"
 AGENT_DOCKERFILE = """\
 FROM scratch
 COPY seclab-agent /seclab-agent

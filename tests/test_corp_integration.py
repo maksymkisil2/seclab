@@ -151,3 +151,32 @@ def test_per_vuln_toggle_removes_a_class_end_to_end(rt):
         assert "sqli" not in hits and "admin" not in hits  # disabled classes behave securely
     finally:
         teardown(rt, name, purge=True)
+
+
+def test_detection_sees_attack_even_when_hardened(rt):
+    # Hardened: the attack captures nothing, but the attempts are logged and detection flags them.
+    lab = _lab(rt, "hardened", "hard", f"det{os.getpid() % 100}")
+    try:
+        assert not [r for r in lab.attack(("sqli", "traversal")) if r.get("captured")]
+        rep = lab.detect(rt)
+        rules = {a["rule"] for a in rep["alerts"]}
+        assert "http-sqli" in rules and "http-traversal" in rules, rep
+        assert rep["events"] > 0 and rep["by_kind"].get("http", 0) > 0
+        assert any(a["technique"] == "T1190" for a in rep["alerts"])        # ATT&CK mapping
+        # severities present and sane
+        assert all(a["severity"] in ("info", "low", "medium", "high", "critical") for a in rep["alerts"])
+    finally:
+        teardown(rt, lab.name, purge=True)
+
+
+def test_detection_min_severity_filter(rt):
+    lab = _lab(rt, "vulnerable", "easy", f"dsv{os.getpid() % 100}")
+    try:
+        lab.attack()
+        all_alerts = lab.detect(rt, "info")["alerts"]
+        high_only = lab.detect(rt, "high")["alerts"]
+        assert len(high_only) <= len(all_alerts)
+        assert all(a["severity"] in ("high", "critical") for a in high_only)
+        assert any(a["rule"] == "http-sqli" for a in high_only)             # sqli is high
+    finally:
+        teardown(rt, lab.name, purge=True)

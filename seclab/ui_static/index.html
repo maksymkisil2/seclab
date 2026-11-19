@@ -70,6 +70,7 @@
           <button data-tab="fw" class="tab">Firewall</button>
           <button data-tab="flags" class="tab">Flags</button>
           <button data-tab="attacks" class="tab">Attacks</button>
+          <button data-tab="detect" class="tab">Detection</button>
         </div>
       </div>
 
@@ -115,6 +116,28 @@
         </table>
         <p class="dim small">Runs the built-in exploit catalogue against the lab's own vulnweb sites on
           127.0.0.1 and submits captured flags. For checking your own defenses; it never targets anything else.</p>
+      </div>
+
+      <div id="tab-detect" class="tabpane hidden">
+        <div class="row">
+          <button id="detect-run">Run detection</button>
+          <label class="dim">min severity
+            <select id="detect-sev">
+              <option value="info">info</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
+          <span id="detect-msg" class="summary"></span>
+        </div>
+        <table id="detect-results" class="grid compact">
+          <thead><tr><th>severity</th><th>rule</th><th>ATT&amp;CK</th><th>source</th><th>count</th><th>title</th><th>evidence</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="dim small">Blue team: collects the lab's logs (site access logs, sshd, router firewall
+          counters) and runs the detection engine. Run an attack or an audit, then detection — the
+          attempts show up here even when the hardened defenses blocked them.</p>
       </div>
 
       <div id="tab-fw" class="tabpane hidden">

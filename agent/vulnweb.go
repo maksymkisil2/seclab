@@ -25,7 +25,9 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var Levels = []string{"easy", "medium", "hard", "secure"}
@@ -526,6 +529,36 @@ func parseVulns(list string) (map[string]bool, error) {
 	return out, nil
 }
 
+// statusRecorder captures the response status for the access log.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// LoggedHandler wraps the app and writes one JSON access line per request to w. These lines are what
+// the detection engine consumes; the app never labels requests as attacks — detection infers that.
+func (a *App) LoggedHandler(w io.Writer) http.Handler {
+	h := a.Handler()
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: rw, status: 200}
+		h.ServeHTTP(rec, r)
+		client := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(client); err == nil {
+			client = host
+		}
+		line, _ := json.Marshal(map[string]any{
+			"ev": "http", "ts": float64(time.Now().UnixNano()) / 1e9, "method": r.Method,
+			"path": r.URL.Path, "query": r.URL.RawQuery, "status": rec.status, "client": client,
+		})
+		fmt.Fprintln(w, string(line))
+	})
+}
+
 // ---- entry --------------------------------------------------------------------------------
 func runVulnweb(args []string) int {
 	fs := flag.NewFlagSet("vulnweb", flag.ContinueOnError)
@@ -561,7 +594,7 @@ func runVulnweb(args []string) int {
 		return 1
 	}
 	log.Printf("vulnweb %s level=%s listen=%s", *site, *level, *listen)
-	srv := &http.Server{Addr: *listen, Handler: app.Handler()}
+	srv := &http.Server{Addr: *listen, Handler: app.LoggedHandler(os.Stdout)}
 	if err := srv.ListenAndServe(); err != nil {
 		log.Print(err)
 		return 1

@@ -195,6 +195,15 @@ def test_ui_generate_exploit_and_score(live):
         score_now = page.locator("#flag-score").inner_text()
         assert not score_now.startswith("1/"), f"attack did not advance the score: {score_now}"
 
+        # Detection tab: the attack we just ran shows up as alerts (blue-team loop).
+        page.locator(".tab[data-tab=detect]").click()
+        page.locator("#detect-run").click()
+        playwright.expect(page.locator("#detect-results tbody tr").first).to_be_visible(timeout=180_000)
+        rules = page.locator("#detect-results tbody tr td:nth-child(2)").all_inner_texts()
+        assert "http-sqli" in rules and "http-traversal" in rules, rules
+        playwright.expect(page.locator("#detect-msg")).to_contain_text("alert")
+        shot(page, "9-detection")
+
         row.get_by_role("button", name="purge").click()
         page.locator("#labs tbody tr", has_text=name).wait_for(state="detached", timeout=120_000)
         browser.close()

@@ -264,6 +264,13 @@ class Engine:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc)) from None
         return {"results": results, "categories": list(ATTACK_CATEGORIES), **lab.score()}
 
+    def detect(self, name: str, body: dict) -> dict:
+        lab = self.topo_lab(name)
+        sev = body.get("min_severity", "info")
+        if sev not in ("info", "low", "medium", "high", "critical"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "bad min_severity")
+        return lab.detect(self.rt, sev)
+
     def reset(self, name: str) -> dict:
         st = self._state(name)
         if st.get("kind") == "web":
@@ -314,6 +321,7 @@ ROUTES = [
     ("GET", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/flags$"), "flags"),
     ("POST", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/flags$"), "submit"),
     ("POST", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/attack$"), "attack"),
+    ("POST", re.compile(r"^/api/labs/(?P<name>[a-z0-9-]+)/detect$"), "detect"),
 ]
 
 
@@ -422,6 +430,9 @@ def make_handler(engine: Engine, jobs: Jobs, token: str, port: int):
             if action == "attack":
                 engine.topo_lab(name)  # fail fast for web labs / unknown labs
                 return jobs.start(name, "attack", lambda: engine.attack(name, body))
+            if action == "detect":
+                engine.topo_lab(name)
+                return jobs.start(name, "detect", lambda: engine.detect(name, body))
             if action == "preview":
                 return engine.preview(body)
             if action == "topology":

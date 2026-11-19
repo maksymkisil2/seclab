@@ -217,3 +217,19 @@ func TestEasyLeaksSQLErrors(t *testing.T) {
 		t.Error("medium must not leak SQL errors")
 	}
 }
+
+func TestLoggedHandlerEmitsAccessLine(t *testing.T) {
+	app, err := NewApp("easy", "T", map[string]string{}, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	srv := httptest.NewServer(app.LoggedHandler(&buf))
+	defer srv.Close()
+	http.Get(srv.URL + "/directory?q=zz%27%20UNION%20SELECT")
+	line := strings.TrimSpace(buf.String())
+	if !strings.HasPrefix(line, "{") || !strings.Contains(line, `"ev":"http"`) ||
+		!strings.Contains(line, `"path":"/directory"`) || !strings.Contains(line, "UNION") {
+		t.Errorf("bad access line: %q", line)
+	}
+}

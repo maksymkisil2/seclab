@@ -47,6 +47,11 @@ def render(topo: Topology, level: str, extra: list[Allow] | tuple[Allow, ...] = 
         f"        elements = {{ {lab_nets} }}",
         "    }",
         "",
+    ]
+    if strict:
+        # Named counter for denied cross-segment flows; the detection engine reads it by name.
+        lines += ["    counter seclab_denied { }", ""]
+    lines += [
         "    chain boundary {",
         "        type filter hook forward priority -10; policy accept;",
         "        ct status dnat accept",
@@ -80,8 +85,9 @@ def render(topo: Topology, level: str, extra: list[Allow] | tuple[Allow, ...] = 
             )
         if not hardened:
             lines.append("        icmp type echo-request ip saddr @lab_nets ip daddr @lab_nets limit rate 5/second accept")
-    if hardened:
-        lines.append("        counter drop")
+    if strict:
+        # Everything the allow-list denied increments the named counter the detector reads.
+        lines.append('        counter name "seclab_denied" drop')
     lines.append("    }")
     if strict:
         lines += [

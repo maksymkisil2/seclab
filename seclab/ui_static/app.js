@@ -212,7 +212,7 @@ function renderDetail(changed = false) {
 function showTab(name) {
   state.tab = name;
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === name);
-  for (const p of ["topo", "check", "fw", "flags", "attacks"]) $(`#tab-${p}`).classList.toggle("hidden", p !== name);
+  for (const p of ["topo", "check", "fw", "flags", "attacks", "detect"]) $(`#tab-${p}`).classList.toggle("hidden", p !== name);
   if (name === "fw") loadFirewall();
   if (name === "flags") loadFlags();
 }
@@ -502,6 +502,34 @@ function renderAttackResults(res) {
   }
 }
 
+// ---- detection (blue team) ---------------------------------------------------------
+const SEV_CLASS = { critical: "bad", high: "bad", medium: "warn", low: "", info: "" };
+
+async function runDetection() {
+  const lab = selectedLab();
+  if (!lab || lab.kind !== "topology") return;
+  const sev = $("#detect-sev").value;
+  const j = await startJob("POST", `/api/labs/${lab.name}/detect`, { min_severity: sev }, `detect ${lab.name}`);
+  if (j && j.state === "done") renderDetection(j.result);
+}
+
+function renderDetection(res) {
+  const tbody = $("#detect-results tbody");
+  tbody.replaceChildren();
+  const alerts = res.alerts || [];
+  const kinds = Object.entries(res.by_kind || {}).map(([k, v]) => `${k}:${v}`).join(", ") || "none";
+  const msg = $("#detect-msg");
+  msg.textContent = `${res.events} events (${kinds}) · ${alerts.length} alert(s)`;
+  msg.className = "summary " + (alerts.length ? "pill bad" : "pill");
+  for (const a of alerts) {
+    tbody.append(el("tr", {},
+      el("td", {}, el("span", { class: "pill " + (SEV_CLASS[a.severity] || "") }, a.severity)),
+      el("td", {}, a.rule), el("td", {}, a.technique), el("td", {}, a.source || ""),
+      el("td", {}, "x" + a.count), el("td", {}, a.title),
+      el("td", { class: "dim small" }, (a.evidence || []).join(" · "))));
+  }
+}
+
 // ---- wiring ------------------------------------------------------------------------
 function init() {
   if (!state.token) { $("#auth").classList.remove("hidden"); setConn(false, "no token"); return; }
@@ -515,6 +543,7 @@ function init() {
   $("#flag-in").addEventListener("keydown", (ev) => { if (ev.key === "Enter") submitFlag(); });
   initGenerator();
   initAttacks();
+  $("#detect-run").addEventListener("click", runDetection);
   for (const p of PROFILES) {
     const b = el("button", { class: "ghost" }, p);
     b.addEventListener("click", () => {

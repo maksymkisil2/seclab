@@ -82,6 +82,9 @@ def _parser() -> argparse.ArgumentParser:
     at = lab.add_parser("attack", help="run the built-in exploit catalogue against your own lab sites")
     at.add_argument("--name", required=True)
     at.add_argument("--only", help=f"categories, comma list from {','.join(ATTACK_CATEGORIES)}")
+    dt = lab.add_parser("detect", help="blue team: collect logs and run the detection engine")
+    dt.add_argument("--name", required=True)
+    dt.add_argument("--min-severity", default="info", choices=["info", "low", "medium", "high", "critical"])
     for name, hlp in (("down", None), ("reset", "purge and recreate"), ("check", "audit reachability vs target policy")):
         sp = lab.add_parser(name, help=hlp)
         sp.add_argument("--name", required=True)
@@ -181,6 +184,18 @@ def _lab_cmd(a) -> int:
             print(f"{mark:3} {r['node']:12} {r.get('category', '-'):10} {r.get('technique', ''):28} "
                   f"{r.get('flag', '')} {r.get('detail', '')}")
         print(f"\n{captured} flag(s) captured; see 'seclab lab score --name {a.name}'")
+        return 0
+    if a.action == "detect":
+        rep = lab.detect(rt, a.min_severity)
+        kinds = ", ".join(f"{k}:{v}" for k, v in sorted(rep["by_kind"].items())) or "none"
+        print(f"events: {rep['events']} ({kinds})")
+        if not rep["alerts"]:
+            print("no alerts")
+            return 0
+        for al in rep["alerts"]:
+            print(f"{al['severity'].upper():8} {al['rule']:18} {al['technique']:6} {al['source']:10} "
+                  f"x{al['count']:<4} {al['title']}")
+        print(f"\n{len(rep['alerts'])} alert(s)")
         return 0
     if a.action == "reset":
         lab.reset(rt)

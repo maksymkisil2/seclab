@@ -88,6 +88,30 @@ seclab lab attack --name corp --only sqli,idor
 UI: *Attacks* tab — pick categories, *Run attacks*, read the results table. Categories: `sqli`, `idor`,
 `traversal`, `admin`, `creds`.
 
+## Detection (blue team)
+
+A detection engine (`seclab-agent monitor`) collects the lab's logs — site access logs, sshd auth lines,
+the router's firewall drop counter — normalises them to events, and applies rules with signatures,
+sliding-window thresholds and MITRE ATT&CK mapping. Run an attack or an audit, then detection: the
+attempts surface as alerts **even when the hardened defenses blocked them**.
+```sh
+seclab lab detect --name corp                  # all alerts
+seclab lab detect --name corp --min-severity high
+```
+UI: *Detection* tab — *Run detection*, read the alerts (severity, rule, ATT&CK, source, evidence).
+
+| rule | signal | severity | ATT&CK |
+|---|---|---|---|
+| http-sqli / http-traversal / http-xss | attack signatures in a single request | high / high / medium | T1190 / T1083 / T1059 |
+| http-enum | burst of 401/403/404 or note walking from one source | medium | T1595 |
+| http-admin-probe | repeated hits on /admin, /backup, robots.txt | medium | T1595 |
+| ssh-bruteforce | ≥5 failed logins from one source in 60 s | high | T1110 |
+| ssh-root-login | successful root SSH login | medium | T1078 |
+| fw-denied-flows | ≥10 blocked cross-segment packets (scan / lateral) | high | T1046 |
+
+Detection is batch (collect-and-run), same as audit and attacks; it uses the logs accumulated since
+the lab started (`reset` clears the baseline).
+
 ## Modes
 | command | what |
 |---|---|

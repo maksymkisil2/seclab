@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import random
+import re
 import secrets
 import shutil
 import socket
@@ -211,6 +212,87 @@ class Lab:
                 if f.get("captured") and f.get("flag"):
                     self.submit_flag(f["flag"])
         return results
+
+    # ---- blue team: log collection + detection -------------------------------
+    def _http_events(self, rt: Runtime) -> list[dict]:
+        events = []
+        for n in self.topo.nodes.values():
+            if n.role != "vulnweb":
+                continue
+            out = rt.run("logs", "--tail", "5000", self.cname(n.name), check=False).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if not line.startswith("{") or '"ev":"http"' not in line and '"ev": "http"' not in line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("ev") != "http":
+                    continue
+                events.append({"ts": ev.get("ts", 0.0), "source": n.name, "role": "vulnweb", "kind": "http",
+                               "method": ev.get("method", ""), "path": ev.get("path", ""),
+                               "query": ev.get("query", ""), "status": ev.get("status", 0),
+                               "client": ev.get("client", "")})
+        return events
+
+    def _ssh_events(self, rt: Runtime) -> list[dict]:
+        fail = re.compile(r"Failed password for (?:invalid user )?(\S+) from (\S+)")
+        ok = re.compile(r"Accepted \S+ for (\S+) from (\S+)")
+        events = []
+        for n in self.topo.nodes.values():
+            if n.role != "ssh":
+                continue
+            logs = rt.run("logs", "--tail", "5000", self.cname(n.name), check=False)
+            ts = time.time()
+            for line in (logs.stdout + logs.stderr).splitlines():
+                if m := fail.search(line):
+                    events.append({"ts": ts, "source": n.name, "role": "ssh", "kind": "ssh",
+                                   "event": "auth_fail", "user": m.group(1), "client": m.group(2)})
+                elif m := ok.search(line):
+                    events.append({"ts": ts, "source": n.name, "role": "ssh", "kind": "ssh",
+                                   "event": "auth_ok", "user": m.group(1), "client": m.group(2)})
+        return events
+
+    def _fw_events(self, rt: Runtime) -> list[dict]:
+        """Denied cross-segment packets since the last detection, from the router's forward-drop counter."""
+        out = rt.run("exec", self.router, "nft", "list", "counter", "inet", "seclab", "seclab_denied",
+                     check=False)
+        if out.returncode != 0:
+            return []  # flat firewall (vulnerable/easy) has no such counter
+        m = re.search(r"packets (\d+) bytes", out.stdout)
+        if not m:
+            return []
+        total = int(m.group(1))
+        state_path = self.lab_dir / "monitor_state.json"
+        base = 0
+        if state_path.exists():
+            base = json.loads(state_path.read_text()).get("denied", 0)
+        state_path.write_text(json.dumps({"denied": total}))
+        delta = total - base
+        if delta <= 0:
+            return []
+        return [{"ts": time.time(), "source": "router", "role": "router", "kind": "fw",
+                 "verdict": "drop", "delta": delta}]
+
+    def collect_events(self, rt: Runtime) -> list[dict]:
+        events = self._http_events(rt) + self._ssh_events(rt) + self._fw_events(rt)
+        events.sort(key=lambda e: e["ts"])
+        return events
+
+    def detect(self, rt: Runtime, min_severity: str = "info") -> dict:
+        """Collect this lab's logs and run them through the detection engine. Returns alerts + a summary."""
+        events = self.collect_events(rt)
+        by_kind: dict[str, int] = {}
+        for e in events:
+            by_kind[e["kind"]] = by_kind.get(e["kind"], 0) + 1
+        feed = "\n".join(json.dumps(e) for e in events)
+        proc = subprocess.run([str(agent_binary()), "monitor", "-json", "-min-severity", min_severity],
+                              input=feed, capture_output=True, text=True, timeout=60, check=False)
+        if proc.returncode != 0:
+            raise ContainerError(f"detection engine failed: {proc.stderr.strip()}")
+        alerts = json.loads(proc.stdout or "[]")
+        return {"alerts": alerts, "events": len(events), "by_kind": by_kind}
 
     @classmethod
     def load_state(cls, lab: str) -> "Lab":
