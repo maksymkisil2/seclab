@@ -161,6 +161,16 @@ class WebLab:
     def up(self, rt: Runtime, ready_timeout: float = 30.0) -> None:
         if rt.container_ids(lab_label(self.name)) or rt.network_ids(lab_label(self.name)):
             raise ContainerError(f"lab '{self.name}' already exists; run 'down' or 'reset' first")
+        taken = []
+        for port in (self.http_port, self.https_port):
+            with socket.socket() as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.bind(("127.0.0.1", port))
+                except OSError:
+                    taken.append(port)
+        if taken:
+            raise ContainerError(f"host port(s) {taken} already in use: choose other --http-port/--https-port")
         rt.ensure_image(self.image)
         self.prepare_files()
         try:

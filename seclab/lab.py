@@ -294,12 +294,41 @@ class Lab:
                 "--cap-add", "NET_ADMIN", "--entrypoint", "ip", node_image(), "route", "replace", "default", "via", gw]
 
     # ---- lifecycle ----------------------------------------------------------
-    def up(self, rt: Runtime, ready_timeout: float = 45.0) -> None:
+    def reset(self, rt: Runtime) -> None:
+        """Recreate from saved state. Same seed -> same holes and flags, so the scoreboard is kept."""
+        score = self.lab_dir / "score.json"
+        kept = score.read_text() if score.exists() else None
+        teardown(rt, self.name, purge=True)
+        self.up(rt)
+        if kept is not None:
+            score.write_text(kept)
+
+    def busy_ports(self) -> list[int]:
+        """Forwarded host ports already taken on 127.0.0.1 (another lab or service)."""
+        taken = []
+        for f in self.topo.forwards:
+            port = f.host_port + self.port_offset
+            with socket.socket() as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("127.0.0.1", port))
+                except OSError:
+                    taken.append(port)
+        return taken
+
+    def _start_node(self, rt: Runtime, node: Node) -> None:
+        rt.run(*self.node_args(node))
+        rt.run(*self.netinit_args(node))
+
+    def up(self, rt: Runtime, ready_timeout: float = 45.0, workers: int = 8) -> None:
         require_routed_networks(rt)
         label = lab_label(self.name)
         if rt.container_ids(label) or rt.network_ids(label):
             raise ContainerError(f"lab '{self.name}' already exists; run 'down' or 'reset' first")
-        ensure_images(rt, need_agent=any(n.role == "vulnweb" for n in self.topo.nodes.values()))
+        taken = self.busy_ports()
+        if taken:
+            raise ContainerError(f"host port(s) {taken} already in use (another lab?): choose another --port-offset")
+        ensure_images(rt, need_agent=True)
         self.prepare_files(rt)
         try:
             for net in self.network_args():
@@ -309,31 +338,40 @@ class Lab:
                 rt.run("network", "connect", "--ip", seg.router_ip, self.net(seg.name), self.router)
             rt.run("start", self.router)
             self.apply_firewall(rt, (self.lab_dir / "router.nft").read_text())
-            for node in self.topo.nodes.values():
-                rt.run(*self.node_args(node))
-            for node in self.topo.nodes.values():
-                rt.run(*self.netinit_args(node))
+            # nodes are independent (upstreams are addressed by IP): start them concurrently
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for fut in [pool.submit(self._start_node, rt, n) for n in self.topo.nodes.values()]:
+                    fut.result()
             self.wait_ready(rt, ready_timeout)
         except Exception as exc:
-            names = [self.router, *(self.cname(n) for n in self.topo.nodes)]
-            diag = "\n".join(f"--- {n} ---\n{rt.logs(n)}" for n in names)
+            diag = self._diagnostics(rt)
             teardown(rt, self.name, purge=False)
             raise ContainerError(f"lab '{self.name}' failed: {exc}\n{diag}") from None
 
+    def _states(self, rt: Runtime) -> dict[str, str]:
+        out = rt.run("ps", "-a", "--filter", f"label={lab_label(self.name)}",
+                     "--format", "{{.Names}}\t{{.State}}", check=False).stdout
+        return dict(line.split("\t", 1) for line in out.splitlines() if "\t" in line)
+
+    def _diagnostics(self, rt: Runtime) -> str:
+        states = self._states(rt)
+        broken = [n for n, st in states.items() if st != "running"] or [self.router]
+        return "\n".join(f"--- {n} ({states.get(n, '?')}) ---\n{rt.logs(n)}" for n in broken[:5])
+
     def wait_ready(self, rt: Runtime, timeout: float) -> None:
-        pending = {(n.name, n.ip, p) for n in self.topo.nodes.values() for p in n.ports}
+        """Every node port must accept TCP from the router netns (one batched probe per round)."""
+        pending = {(n.ip, p) for n in self.topo.nodes.values() for p in n.ports}
+        expected = {self.router, *(self.cname(n) for n in self.topo.nodes)}
         deadline = time.monotonic() + timeout
         while pending and time.monotonic() < deadline:
-            for cname in [self.router, *(self.cname(n) for n in self.topo.nodes)]:
-                st = rt.inspect("container", cname)["State"]
-                if not st["Running"]:
-                    raise ContainerError(f"{cname} exited (code {st.get('ExitCode')})")
-            for item in list(pending):
-                _, ip, port = item
-                if rt.run("exec", self.router, "nc", "-z", "-w", "1", ip, str(port), check=False).returncode == 0:
-                    pending.discard(item)
+            states = self._states(rt)
+            dead = sorted(n for n in expected if states.get(n) != "running")
+            if dead:
+                raise ContainerError(f"not running: {', '.join(dead)}")
+            got = _probe_ns(rt, f"container:{self.router}", sorted(pending), timeout="1s")
+            pending = {t for t in pending if not got.get(t)}
             if pending:
-                time.sleep(0.5)
+                time.sleep(0.3)
         if pending:
             raise ContainerError(f"not listening after {timeout}s: {sorted(pending)}")
 
@@ -405,19 +443,25 @@ def plan_routes(topo: Topology) -> list[tuple[Node, Node, int, bool]]:
     return plan
 
 
-def _probe_batch(rt: Runtime, lab: Lab, src: str, targets: list[tuple[str, int]]) -> dict[tuple[str, int], bool]:
-    """All probes of one source in one container (seclab-agent probe connects in parallel)."""
+def _probe_ns(rt: Runtime, network: str, targets: list[tuple[str, int]], timeout: str = "1s"
+              ) -> dict[tuple[str, int], bool]:
+    """Probe many targets from one network namespace with one container (seclab-agent connects in parallel)."""
     if not targets:
         return {}
     args = [f"{ip}:{port}" for ip, port in targets]
-    p = rt.run("run", "--rm", "--network", f"container:{lab.cname(src)}", *PROBE_FLAGS,
-               "--entrypoint", "/seclab-agent", agent_image(), "probe", "-timeout", "2s", *args, timeout=120)
+    p = rt.run("run", "--rm", "--network", network, *PROBE_FLAGS,
+               "--entrypoint", "/seclab-agent", agent_image(), "probe", "-timeout", timeout, *args, timeout=120)
     out = {}
     for line in p.stdout.splitlines():
         target, _, state = line.rpartition(" ")
         ip, _, port = target.rpartition(":")
         out[(ip, int(port))] = state == "open"
     return out
+
+
+def _probe_batch(rt: Runtime, lab: Lab, src: str, targets: list[tuple[str, int]]) -> dict[tuple[str, int], bool]:
+    """All audit probes of one source node. Inside the lab a SYN answers in microseconds: 1 s is ample."""
+    return _probe_ns(rt, f"container:{lab.cname(src)}", targets, timeout=os.environ.get("SECLAB_PROBE_TIMEOUT", "1s"))
 
 
 def _ingress_open(port: int) -> bool:
@@ -442,7 +486,7 @@ def _ingress_open(port: int) -> bool:
         return False
 
 
-def check(rt: Runtime, lab: Lab, workers: int = 6) -> list[Result]:
+def check(rt: Runtime, lab: Lab, workers: int = 12) -> list[Result]:
     ensure_images(rt, need_agent=True)
     eh, ep = egress_target()
     per_src: dict[str, list[tuple[str, str, int, bool]]] = {}

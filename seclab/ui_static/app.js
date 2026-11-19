@@ -127,14 +127,20 @@ async function loadScenarios() {
 }
 
 // ---- labs --------------------------------------------------------------------------
-async function refreshLabs() {
+async function refreshLabs(force = false) {
+  let labs;
   try {
-    state.labs = await api("GET", "/api/labs");
+    labs = await api("GET", "/api/labs");
     setConn(true, "connected");
   } catch (e) {
     if (state.token) setConn(false, "offline");
     return;
   }
+  // polling runs every few seconds: re-render only when something actually changed
+  const sig = JSON.stringify(labs);
+  if (!force && sig === state.labsSig) return;
+  state.labsSig = sig;
+  state.labs = labs;
   renderLabs();
   renderDetail();
 }
@@ -448,7 +454,7 @@ function initGenerator() {
 function init() {
   if (!state.token) { $("#auth").classList.remove("hidden"); setConn(false, "no token"); return; }
   for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => showTab(b.dataset.tab));
-  $("#refresh").addEventListener("click", refreshLabs);
+  $("#refresh").addEventListener("click", () => refreshLabs(true));
   $("#run-check").addEventListener("click", () => state.selected && runCheck(state.selected));
   $("#only-fail").addEventListener("change", () => state.selected && renderCheck(state.selected));
   $("#fw-apply").addEventListener("click", () => applyFirewall({ ruleset: $("#fw-edit").value }, "edited ruleset"));

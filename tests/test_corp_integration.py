@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import urllib.parse
 import urllib.request
 
@@ -75,6 +76,10 @@ def test_vulnerable_easy_sqli_flag_and_score(rt):
         assert score["solved"] == ["portal/sqli"] and len(score["total"]) == 8
         info = rt.inspect("container", lab.cname("portal"))
         assert info["Config"]["User"] == "65534:65534" and not info["HostConfig"]["PortBindings"]
+        lab.reset(rt)                                                  # same seed: same flags, score kept
+        assert lab.score()["solved"] == ["portal/sqli"]
+        _, body = _get(port, "/directory?q=" + urllib.parse.quote(UNION))
+        assert flag.group(0) in body
     finally:
         teardown(rt, lab.name, purge=True)
         assert not rt.container_ids(lab_label(lab.name))
@@ -93,3 +98,17 @@ def test_hardened_is_secure_and_meets_policy(rt):
         assert not bad, bad
     finally:
         teardown(rt, lab.name, purge=True)
+
+
+def test_busy_port_is_rejected_before_anything_is_created(rt):
+    name = f"corpb{os.getpid() % 100}"
+    params = generator.Params(name=name, departments=1, hosts_per_dept=0, sites=1, public_sites=0,
+                              database=False, fileserver=False, mgmt=False, guest=False, base=131)
+    lab = Lab(name, generator.build(params), get_profile("vulnerable"), "x", OFFSET + 50, "easy", 1)
+    port = lab.topo.forwards[0].host_port + lab.port_offset
+    with socket.socket() as blocker:
+        blocker.bind(("127.0.0.1", port))
+        blocker.listen(1)
+        with pytest.raises(Exception, match=f"{port}.*in use"):
+            lab.up(rt)
+    assert not rt.container_ids(lab_label(name)) and not rt.network_ids(lab_label(name))

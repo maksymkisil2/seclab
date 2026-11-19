@@ -162,4 +162,5 @@ ports = [8080]
 ./selftest/run.sh          # real images; pulls nginx:1.27-alpine and alpine:3.20 (for the node build)
 ./selftest/run.sh --stub   # offline: scratch stub (Go) + host nft; skips nginx/sshd semantics
 pip install playwright && playwright install chromium   # optional: enables the browser UI test
+python3 selftest/bench.py  # lifecycle timings on a 23-container network (stub images)
 ```

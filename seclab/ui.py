@@ -239,11 +239,11 @@ class Engine:
 
     def reset(self, name: str) -> dict:
         st = self._state(name)
-        teardown(self.rt, name, purge=True)
         if st.get("kind") == "web":
+            teardown(self.rt, name, purge=True)
             WebLab.from_state(st).up(self.rt)
         else:
-            Lab.from_state(st).up(self.rt)
+            Lab.from_state(st).reset(self.rt)
         return {"name": name}
 
     def check(self, name: str) -> dict:

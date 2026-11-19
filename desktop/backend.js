@@ -6,7 +6,7 @@
 //          127.0.0.1 ports to Windows, so the window and the lab ports work from Windows directly)
 
 const DEFAULT_DISTRO = "seclab";
-const READY_TIMEOUT_MS = 60_000;
+const READY_TIMEOUT_MS = 120_000;  // first WSL2 boot (systemd) can take a while
 
 function backendCommand(platform, env = {}) {
   const args = ["ui", "--port", "0", "--json", "--exit-on-stdin-eof"];

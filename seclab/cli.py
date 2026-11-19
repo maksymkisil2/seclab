@@ -149,8 +149,7 @@ def _lab_cmd(a) -> int:
             print(f"  [{'x' if item in sc['solved'] else ' '}] {item}")
         return 0
     if a.action == "reset":
-        teardown(rt, a.name, purge=True)
-        lab.up(rt)
+        lab.reset(rt)
         print(f"reset {lab.name} profile={lab.profile.name}")
         return 0
     if a.action == "check":
