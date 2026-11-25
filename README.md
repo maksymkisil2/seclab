@@ -1,5 +1,7 @@
 # seclab
 
+**English** · [Deutsch](README.de.md)
+
 Local corporate-network simulator for administration and security practice: segmented networks with an
 nftables router, generated companies of configurable size, vulnerable web apps with difficulty levels and
 flags, reachability audit, desktop app. Python 3.11+ (stdlib only), Docker ≥ 28, Go agent (static binary).
