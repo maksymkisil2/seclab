@@ -8,3 +8,6 @@ build/
 dist/
 desktop/node_modules/
 desktop/dist/
+
+# Context prepared by the autodev workflow (never committed)
+.autodev/
