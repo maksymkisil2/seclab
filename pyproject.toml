@@ -23,3 +23,20 @@ seclab = ["scenarios/*.toml", "ui_static/*", "bin/seclab-agent-*"]
 
 [tool.pytest.ini_options]
 markers = ["integration: needs a running docker/podman daemon"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # import order
+    "B",       # likely bugs
+    "UP",      # modern syntax
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Benchmark script: deliberately compact monkey-patching of the runtime.
+"selftest/bench.py" = ["E501", "E702"]

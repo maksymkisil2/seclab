@@ -1,6 +1,10 @@
 """Benchmark lab lifecycle on a generated network (stub images, sshd replaced): python3 selftest/bench.py
 Env: DEPTS (default 4), PROFILE (default vulnerable). Prints time per docker sub-command and phase."""
-import collections, os, sys, time
+import collections
+import os
+import sys
+import time
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from seclab import generator
 from seclab.images import node_image

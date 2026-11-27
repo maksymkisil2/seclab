@@ -85,12 +85,12 @@ class WebLab:
                 "http_port": self.http_port, "https_port": self.https_port, "image": self.image}
 
     @classmethod
-    def from_state(cls, state: dict) -> "WebLab":
+    def from_state(cls, state: dict) -> WebLab:
         return cls(name=state["name"], profile=get_profile(state["profile"]),
                    http_port=state["http_port"], https_port=state["https_port"], image=state["image"])
 
     @classmethod
-    def load(cls, lab: str) -> "WebLab":
+    def load(cls, lab: str) -> WebLab:
         path = seclab_home() / "labs" / validate_name(lab) / "lab.json"
         if not path.exists():
             raise FileNotFoundError(f"no saved state for lab '{lab}' ({path})")
@@ -115,7 +115,8 @@ class WebLab:
         if self.profile.name == "vulnerable":
             # Planted exposures for audit practice (dummy data only).
             (www / "backup").mkdir()
-            (www / "backup" / "db.sql.bak").write_text("-- seclab dummy dump\nINSERT INTO users VALUES ('admin','dummy');\n")
+            (www / "backup" / "db.sql.bak").write_text(
+                "-- seclab dummy dump\nINSERT INTO users VALUES ('admin','dummy');\n")
             (www / ".git").mkdir()
             (www / ".git" / "config").write_text("[remote \"origin\"]\n\turl = https://example.invalid/seclab.git\n")
         for path in [www, *www.rglob("*")]:

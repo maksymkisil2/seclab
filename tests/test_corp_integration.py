@@ -128,6 +128,7 @@ def test_builtin_attack_runner_captures_and_scores(rt):
         assert set(lab.score()["solved"]) >= {f"{s}/sqli" for s in sites}
         # scoped: refuses to aim anywhere but loopback (checked at the binary)
         import subprocess
+
         from seclab.images import agent_binary
         p = subprocess.run([str(agent_binary()), "attack", "-target", "http://10.0.0.5:80"],
                            capture_output=True, text=True)

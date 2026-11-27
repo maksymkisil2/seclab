@@ -25,7 +25,8 @@ def _parser() -> argparse.ArgumentParser:
     up.add_argument("--profile", default="hardened", choices=list(PROFILES))
     up.add_argument("--http-port", type=int, default=8080)
     up.add_argument("--https-port", type=int, default=8443)
-    up.add_argument("--image", default=None, help="override web image (default: $SECLAB_WEB_IMAGE or nginx:1.27-alpine)")
+    up.add_argument("--image", default=None,
+                    help="override web image (default: $SECLAB_WEB_IMAGE or nginx:1.27-alpine)")
 
     down = web.add_parser("down")
     down.add_argument("--lab", required=True)
@@ -85,7 +86,8 @@ def _parser() -> argparse.ArgumentParser:
     dt = lab.add_parser("detect", help="blue team: collect logs and run the detection engine")
     dt.add_argument("--name", required=True)
     dt.add_argument("--min-severity", default="info", choices=["info", "low", "medium", "high", "critical"])
-    for name, hlp in (("down", None), ("reset", "purge and recreate"), ("check", "audit reachability vs target policy")):
+    for name, hlp in (("down", None), ("reset", "purge and recreate"),
+                      ("check", "audit reachability vs target policy")):
         sp = lab.add_parser(name, help=hlp)
         sp.add_argument("--name", required=True)
         if name == "down":
@@ -247,7 +249,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if a.action == "render":
             prof = get_profile(a.profile)
-            print(nginx.render_edge(prof, "seclab-render-app", a.https_port) if a.role == "edge" else nginx.render_app(prof), end="")
+            if a.role == "edge":
+                conf = nginx.render_edge(prof, "seclab-render-app", a.https_port)
+            else:
+                conf = nginx.render_app(prof)
+            print(conf, end="")
             return 0
         rt = Runtime.detect()
         if a.action == "up":
@@ -255,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
             lab = WebLab(a.lab, get_profile(a.profile), a.http_port, a.https_port, **kw)
             lab.up(rt)
             print(f"up  {lab.name}  profile={lab.profile.name}  "
-                  f"http://127.0.0.1:{lab.http_port}  https://127.0.0.1:{lab.https_port}  ca={lab.lab_dir / 'tls' / 'ca.crt'}")
+                  f"http://127.0.0.1:{lab.http_port}  https://127.0.0.1:{lab.https_port}  "
+                  f"ca={lab.lab_dir / 'tls' / 'ca.crt'}")
         elif a.action == "down":
             teardown(rt, a.lab, a.purge)
             print(f"down {a.lab}{' (purged)' if a.purge else ''}")

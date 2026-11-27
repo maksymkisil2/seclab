@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import random
 from dataclasses import asdict, dataclass
-
 from pathlib import Path
 
 from .topology import Topology, parse

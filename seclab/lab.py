@@ -119,7 +119,7 @@ class Lab:
         return st
 
     @classmethod
-    def from_state(cls, st: dict) -> "Lab":
+    def from_state(cls, st: dict) -> Lab:
         vulns = st.get("vulns")
         return cls(st["name"], load(st["scenario"]), get_profile(st["profile"]), st["scenario"],
                    st.get("port_offset", 0), st.get("difficulty", "medium"), st.get("seed", 0),
@@ -151,8 +151,10 @@ class Lab:
         out = {}
         for n in self.topo.nodes.values():
             if n.role == "vulnweb":
-                out[n.name] = {k: "FLAG{%s-%s}" % (k, hmac.new(key, f"{n.name}:{k}".encode(), hashlib.sha256).hexdigest()[:12])
-                               for k in FLAG_KINDS}
+                out[n.name] = {
+                    k: f"FLAG{{{k}-{hmac.new(key, f'{n.name}:{k}'.encode(), hashlib.sha256).hexdigest()[:12]}}}"
+                    for k in FLAG_KINDS
+                }
         return out
 
     def score(self) -> dict:
@@ -295,7 +297,7 @@ class Lab:
         return {"alerts": alerts, "events": len(events), "by_kind": by_kind}
 
     @classmethod
-    def load_state(cls, lab: str) -> "Lab":
+    def load_state(cls, lab: str) -> Lab:
         path = seclab_home() / "labs" / validate_name(lab) / "lab.json"
         if not path.exists():
             raise FileNotFoundError(f"no saved state for lab '{lab}'")
@@ -335,7 +337,8 @@ class Lab:
                 _write(nd / "nginx.conf", nginx.render_app(self.profile))
                 www = nd / "www"
                 www.mkdir(exist_ok=True)
-                _write(www / "index.html", f"<!doctype html><title>{node.name}</title><h1>seclab {self.name}/{node.name}</h1>\n")
+                _write(www / "index.html",
+                       f"<!doctype html><title>{node.name}</title><h1>seclab {self.name}/{node.name}</h1>\n")
                 os.chmod(www, 0o755)
             elif node.role == "ssh":
                 _write(nd / "sshd_config", sshd.render(self.profile))
@@ -615,7 +618,7 @@ def _ingress_open(port: int) -> bool:
                 if s.recv(1):
                     return True
                 return False
-            except socket.timeout:
+            except TimeoutError:
                 pass
             s.settimeout(3)
             s.sendall(b"HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n")

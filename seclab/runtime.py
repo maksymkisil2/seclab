@@ -29,7 +29,7 @@ class Runtime:
     binary: str
 
     @classmethod
-    def detect(cls) -> "Runtime":
+    def detect(cls) -> Runtime:
         return cls(detect_runtime())
 
     def run(self, *args: str, check: bool = True, timeout: int = 120,
