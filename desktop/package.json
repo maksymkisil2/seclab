@@ -5,6 +5,8 @@
   "description": "Desktop shell for seclab: corporate network lab for administration and security training",
   "main": "main.js",
   "license": "MIT",
+  "homepage": "https://github.com/maksymkisil2/seclab",
+  "author": { "name": "maksymkisil2", "email": "356212547+maksymkisil2@users.noreply.github.com" },
   "private": true,
   "scripts": {
     "start": "electron .",
@@ -26,6 +28,6 @@
     "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true,
               "createDesktopShortcut": true, "createStartMenuShortcut": true },
     "linux": { "target": ["AppImage", "deb"], "category": "Development", "artifactName": "seclab-${version}.${ext}",
-               "maintainer": "seclab" }
+               "maintainer": "maksymkisil2 <356212547+maksymkisil2@users.noreply.github.com>" }
   }
 }
