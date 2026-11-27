@@ -173,13 +173,15 @@ def test_http_behaviour(lab):
 @nginx_only
 def test_https_headers(lab):
     head = _curl(lab, "-D", "-", "-o", "/dev/null", f"https://127.0.0.1:{lab.https_port}/").lower()
-    assert head.startswith("http/2 200") or head.startswith("http/1.1 200")
+    lines = [line.strip() for line in head.splitlines()]
+    assert lines[0].startswith(("http/2 200", "http/1.1 200"))
+    fields = {k.strip(): v.strip() for k, sep, v in (line.partition(":") for line in lines[1:]) if sep}
     for name, _ in lab.profile.http.headers:
-        assert f"\n{name.lower()}:" in head
+        assert name.lower() in fields
     if lab.profile.http.server_tokens:
-        assert "server: nginx/" in head
+        assert fields["server"].startswith("nginx/")
     else:
-        assert "server: nginx\r" in head
+        assert fields["server"] == "nginx"
 
 
 @nginx_only
