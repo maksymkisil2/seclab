@@ -202,8 +202,10 @@ ports = [8080]
 ```
 
 ## Roadmap
-- phase 2: admin services (DNS, DHCP, mail, SMB shares) and a domain (Samba AD: users, groups, policies, Kerberos)
-- phase 3: blue team (central logs, flow sensor / IDS on the router, alerts and incident drills)
+Tracked as an ordered checklist in [ROADMAP.md](ROADMAP.md): core quality first, then admin services
+(DNS, DHCP, mail, SMB shares), web attacks, blue team, a Samba AD domain, and the desktop UI.
+An [automated workflow](.github/autodev/AGENT.md) takes the first open task each weekday and proposes it
+as a pull request; every change is reviewed and merged by hand.
 
 ## Self-test
 ```sh
