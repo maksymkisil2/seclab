@@ -76,7 +76,8 @@ def render(topo: Topology, level: str, extra: list[Allow] | tuple[Allow, ...] = 
         lines += ["        ct state established,related accept", "        ct state invalid counter drop"]
     for f in topo.forwards:
         node = topo.nodes[f.node]
-        lines.append(f"        ct status dnat ip daddr {node.ip} tcp dport {f.port} {cnt}accept  # ingress :{f.host_port}")
+        lines.append(f"        ct status dnat ip daddr {node.ip} tcp dport {f.port} {cnt}accept"
+                     f"  # ingress :{f.host_port}")
     if strict:
         for a in [*topo.allows, *extra]:
             lines.append(
@@ -84,7 +85,8 @@ def render(topo: Topology, level: str, extra: list[Allow] | tuple[Allow, ...] = 
                 f"tcp dport {_ports(a.ports)} ct state new {cnt}accept  # {a.src} -> {a.dst}"
             )
         if not hardened:
-            lines.append("        icmp type echo-request ip saddr @lab_nets ip daddr @lab_nets limit rate 5/second accept")
+            lines.append("        icmp type echo-request ip saddr @lab_nets ip daddr @lab_nets"
+                         " limit rate 5/second accept")
     if strict:
         # Everything the allow-list denied increments the named counter the detector reads.
         lines.append('        counter name "seclab_denied" drop')
@@ -110,6 +112,7 @@ def render(topo: Topology, level: str, extra: list[Allow] | tuple[Allow, ...] = 
         ]
         for f in topo.forwards:
             node = topo.nodes[f.node]
-            lines.append(f"        fib daddr type local tcp dport {f.host_port} dnat to {node.ip}:{f.port}  # -> {f.node}")
+            lines.append(f"        fib daddr type local tcp dport {f.host_port} dnat to {node.ip}:{f.port}"
+                         f"  # -> {f.node}")
         lines += ["    }", "}"]
     return "\n".join(lines) + "\n"

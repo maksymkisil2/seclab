@@ -389,7 +389,7 @@ def make_handler(engine: Engine, jobs: Jobs, token: str, port: int):
                 return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             if not secrets.compare_digest(self.headers.get("X-Seclab-Token", ""), token):
                 return self._json(HTTPStatus.UNAUTHORIZED, {"error": "missing or bad token"})
-            for m, rx, action in ROUTES:
+            for m, rx, action in ROUTES:  # noqa: B007 - used after the loop breaks
                 match = rx.match(path)
                 if match and m == method:
                     break

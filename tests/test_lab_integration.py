@@ -18,7 +18,7 @@ from seclab import firewall
 from seclab.hardening import lab_label
 from seclab.lab import Lab, check, format_report
 from seclab.profiles import get_profile
-from seclab.runtime import Runtime
+from seclab.runtime import ContainerError, Runtime
 from seclab.topology import load
 from seclab.web import teardown
 
@@ -176,7 +176,7 @@ def test_ingress_check_detects_missing_dnat(rt, dmz):
 
 
 def test_invalid_ruleset_rejected_and_old_kept(rt, dmz):
-    with pytest.raises(Exception):
+    with pytest.raises(ContainerError):
         dmz.apply_firewall(rt, "table inet seclab { chain broken { nonsense } }\n")
     assert not _findings(check(rt, dmz))
 
